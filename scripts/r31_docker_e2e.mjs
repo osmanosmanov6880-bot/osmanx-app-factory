@@ -40,7 +40,8 @@ function signed(bytes,pem){const entries=parseStoredZip(bytes,{maxFiles:400,maxB
  return createZip([...entries].map(([name,data])=>({name,data})));
 }
 function assertOnlySyntheticCompose(config,root,env){
- const obj=JSON.parse(docker(['compose','-f',config,'config','--format','json'],root,env));
+ // Maintenance is an opt-in profile: explicitly include it for inventory validation.
+ const obj=JSON.parse(docker(['compose','--profile','maintenance','-f',config,'config','--format','json'],root,env));
  assert.equal(obj.name,projectName);
  assert.deepEqual(Object.keys(obj.services).sort(),['app','gateway','maintenance']);
  for(const service of Object.values(obj.services))assert.equal(service.ports?.length||0,0,'Test must never publish ports');

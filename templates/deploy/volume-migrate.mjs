@@ -407,7 +407,11 @@ function requiredDocker(args,timeout){
   return String(r.stdout||'').trim();
 }
 function helper(src,dst,operation,dbName){
-  const args=['run','--rm','--pull','never','--network','none','--read-only','--security-opt','no-new-privileges:true','--cap-drop','ALL','--cap-add','CHOWN','--cap-add','FOWNER','--pids-limit','128'];
+  // Private backup directories may belong to host UID 1001 while the sealed app volume
+  // belongs to UID 1000. Root in this short-lived, offline helper needs DAC_OVERRIDE
+  // to traverse 0700 mounts without relaxing the host directory permissions.
+  // The container has no network and mounts only explicitly validated source/target.
+  const args=['run','--rm','--pull','never','--network','none','--read-only','--security-opt','no-new-privileges:true','--user','0:0','--cap-drop','ALL','--cap-add','CHOWN','--cap-add','FOWNER','--cap-add','DAC_OVERRIDE','--pids-limit','128'];
   const mount=(item,location,readonly)=>{
     if(typeof item==='string'){insist(volumeName.test(item),'Invalid Docker volume name');return 'type=volume,source='+item+',target='+location+(readonly?',readonly':'')}
     const dir=resolve(item.directory);
