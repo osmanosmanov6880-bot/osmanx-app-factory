@@ -1,6 +1,6 @@
 import {backup as sqliteBackup,DatabaseSync} from 'node:sqlite';
 import {createHash,randomBytes} from 'node:crypto';
-import {readFile,writeFile,mkdir,rename,rm,copyFile,lstat,chmod} from 'node:fs/promises';
+import {readFile,writeFile,mkdir,rename,rm,copyFile,lstat,chmod,chown,open} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import {resolve,join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -55,6 +55,33 @@ async function checkBackup({root,backupDir},id){
  if(bytes.length!==meta.dbBytes||hash(bytes)!==meta.sha256)fail('Backup hash mismatch');
  await checkDb(dbPath);return {ident,dbPath,meta};
 }
+/**
+ * A maintenance container may run as root to traverse a mode-0700 backup mount,
+ * while the application runs as an unprivileged UID. copyFile() creates a NEW
+ * inode owned by the maintenance process. Renaming that inode over a working
+ * SQLite file without restoring its owner makes the app fail at next startup.
+ *
+ * Inspect without following symlinks; the destination owner is authoritative
+ * when a DB exists. During a first-time restore use the data directory owner.
+ * The caller has already verified the signed backup before this function runs.
+ */
+export async function preserveDatabaseOwner(target,pending,{inspect=lstat,setOwner=chown,uid=process.getuid?.(),gid=process.getgid?.()}={}) {
+ let owner;
+ try {
+  const current=await inspect(target);
+  if(!current.isFile()||current.isSymbolicLink())fail('Restore target must be a regular database file');
+  owner=current;
+ } catch(e) {
+  if(e.code!=='ENOENT')throw e;
+  const parent=await inspect(dirname(target));
+  if(!parent.isDirectory()||parent.isSymbolicLink())fail('Restore data directory must be a real directory');
+  owner=parent;
+ }
+ if(!Number.isSafeInteger(owner.uid)||owner.uid<0||!Number.isSafeInteger(owner.gid)||owner.gid<0)
+  fail('Could not determine a safe restore database owner');
+ if(uid!==owner.uid||gid!==owner.gid)await setOwner(pending,owner.uid,owner.gid);
+ return {ownerPreserved:true};
+}
 /** Same checked restore operation for real restore and disposable restoration drills. */
 async function stageVerifiedDatabase(source,target,expected){
  const pending=target+'.incoming-'+randomBytes(8).toString('hex');
@@ -63,7 +90,17 @@ async function stageVerifiedDatabase(source,target,expected){
   const bytes=await readFile(pending);
   if(bytes.length!==expected.dbBytes||hash(bytes)!==expected.sha256)fail('Staged backup hash mismatch');
   await checkDb(pending);
+  // IMPORTANT: take owner from the current DB BEFORE replacing its inode.
+  // If chown is not permitted, abort without touching the original database.
+  await preserveDatabaseOwner(target,pending);
+  await chmod(pending,0o600);
+  if(process.platform!=='win32'){
+   const file=await open(pending,'r');try{await file.sync()}finally{await file.close()}
+  }
   await rename(pending,target);
+  if(process.platform!=='win32'){
+   const directory=await open(dirname(target),'r');try{await directory.sync()}finally{await directory.close()}
+  }
   await checkDb(target);
   if(hash(await readFile(target))!==expected.sha256)fail('Restored database hash mismatch');
  }finally{await rm(pending,{force:true})}

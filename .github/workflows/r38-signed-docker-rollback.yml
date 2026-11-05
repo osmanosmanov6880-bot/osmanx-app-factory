@@ -1,0 +1,67 @@
+name: R3.8 signed Docker rollback and ownership acceptance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'templates/deploy/maintenance.mjs'
+      - 'templates/deploy/upgrade.mjs'
+      - 'scripts/r31_docker_e2e.mjs'
+      - 'scripts/r38_root_ownership_e2e.mjs'
+      - 'tests/r38_maintenance_ownership.test.mjs'
+      - 'src/studio/deployment.mjs'
+      - '.github/workflows/r38-signed-docker-rollback.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r38-rollback-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-maintenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check syntax and unit safety guards
+        run: |
+          npm run check
+          node --test tests/r38_maintenance_ownership.test.mjs
+      - name: Pull a known synthetic test base (no production images)
+        run: docker pull node:22-bookworm-slim
+      - name: Verify root-maintenance to non-root application ownership boundary
+        run: |
+          docker run --rm --pull never --network none --user 0:0 \
+            -v "$PWD:/src:ro" -w /src node:22-bookworm-slim \
+            node scripts/r38_root_ownership_e2e.mjs --confirm-synthetic
+
+  signed-rollback:
+    needs: synthetic-maintenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Pull synthetic test base
+        run: docker pull node:22-bookworm-slim
+      - name: Real isolated signed deployment, crash rollback and forward resume
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          node scripts/r31_docker_e2e.mjs --confirm-isolated-test 2>&1 | tee artifacts/r38-signed-rollback.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r38-synthetic-rollback-evidence
+          path: artifacts/r38-signed-rollback.log
+          if-no-files-found: ignore
+          retention-days: 7

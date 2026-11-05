@@ -114,6 +114,16 @@ async function main(){
   console.log(JSON.stringify({ok:true,realDocker:true,syntheticOnly:true,publicPorts:0,
     firstSignedRollout:'completed',secondSignedRollout:'rolled-back',databaseRestored:true,
     ambiguousGateway:'resumed-forward',clientWritesPreserved:true,retainedSequence:2,publicHttpsVerified:false},null,2));
+ }catch(error){
+  // Diagnostic evidence is gathered ONLY from this random, synthetic Compose
+  // fixture before its volumes are destroyed. Never log real customer containers.
+  if(composeReady){
+   try {
+    const logs=docker(['compose','logs','--no-color','--tail','35','app'],kit,env,15000);
+    console.error('R3.8 synthetic app boot evidence (bounded): '+logs.slice(-3000));
+   }catch(e){console.error('R3.8 synthetic app logs unavailable: '+e.message)}
+  }
+  throw error;
  }finally{
   if(composeReady){try{
     assertOnlySyntheticCompose(composeFile,kit,env);
