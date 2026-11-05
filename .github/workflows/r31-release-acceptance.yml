@@ -1,0 +1,43 @@
+name: R3.1 signed deployment and forward-recovery acceptance
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'templates/deploy/**'
+      - 'templates/standalone/**'
+      - 'src/crm/routes.mjs'
+      - 'src/site/routes.mjs'
+      - 'src/studio/deployment.mjs'
+      - 'scripts/r31_docker_e2e.mjs'
+      - 'tests/r31_*.test.mjs'
+      - '.github/workflows/r31-release-acceptance.yml'
+permissions:
+  contents: read
+jobs:
+  signed-deploy-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Verify Node.js syntax and all offline tests (including local TLS)
+        run: npm run check && npm test
+      - name: Check Docker Engine and Compose
+        run: docker info && docker compose version
+      - name: Download synthetic runtime image
+        run: docker pull node:22-bookworm-slim
+      - name: Signed upgrade + rollback + forward recovery with real Docker
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          node scripts/r31_docker_e2e.mjs --confirm-isolated-test 2>&1 | tee artifacts/r31-docker-acceptance.log
+      - name: Upload acceptance evidence (even on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r31-acceptance-log
+          path: artifacts/r31-docker-acceptance.log
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,121 @@
+{
+  "id": "b2a650d9-f931-423d-8e28-c85f66fd8b36",
+  "name": "OSMANX ATELIER",
+  "type": "site",
+  "industry": "business",
+  "modules": [
+    "auth",
+    "cms",
+    "leads"
+  ],
+  "settings": {
+    "accent": "#d0a976",
+    "tagline": "Продуманные решения для бизнеса",
+    "contactEmail": "hello@example.com"
+  },
+  "pages": [
+    {
+      "title": "Главная",
+      "slug": "home",
+      "description": "Официальный сайт компании — услуги, преимущества и форма связи",
+      "published": true,
+      "blocks": [
+        {
+          "id": "39a66e89-ac74-4dc4-9651-bf89a98d9b77",
+          "type": "hero",
+          "eyebrow": "КАЧЕСТВО И ДОВЕРИЕ",
+          "title": "Решения, которые работают на ваш бизнес.",
+          "subtitle": "Профессиональный подход, понятные процессы и внимание к каждой задаче. Замените этот демонстрационный текст данными компании."
+        },
+        {
+          "id": "c16b5960-75dd-4bef-b40c-058f17a5ecd2",
+          "type": "button",
+          "label": "Обсудить задачу",
+          "href": "/contacts",
+          "style": "primary"
+        },
+        {
+          "id": "9a15c844-2257-4e3e-8e4c-32e3d5ca4709",
+          "type": "features",
+          "title": "Наш подход",
+          "items": [
+            {
+              "title": "Прозрачность",
+              "body": "Объясняем решения понятным языком."
+            },
+            {
+              "title": "Внимание к деталям",
+              "body": "Учитываем контекст и реальные задачи клиента."
+            },
+            {
+              "title": "Ответственность",
+              "body": "Фиксируем этапы, сроки и ожидаемый результат."
+            }
+          ]
+        }
+      ],
+      "schemaVersion": 1,
+      "id": "d7b8a09d-a797-4d8e-8c20-a9cc5a752d90",
+      "revision": 1,
+      "position": 0
+    },
+    {
+      "title": "Услуги",
+      "slug": "services",
+      "description": "Основные направления деятельности компании",
+      "published": true,
+      "blocks": [
+        {
+          "id": "1878dd63-199c-4911-81da-d1ce5cfd0af9",
+          "type": "hero",
+          "eyebrow": "НАПРАВЛЕНИЯ",
+          "title": "Услуги компании",
+          "subtitle": "Редактируйте разделы и преимущества в конструкторе OSMANX."
+        },
+        {
+          "id": "0cccdaa4-571c-4e0f-8964-2f8bba9845bc",
+          "type": "text",
+          "title": "Индивидуальная работа",
+          "body": "Опишите здесь действительные услуги и условия вашей компании. Не публикуйте неподтверждённые обещания."
+        },
+        {
+          "id": "1767af79-1e6a-46ac-b77b-3ed8cf6999ef",
+          "type": "button",
+          "label": "Запросить консультацию",
+          "href": "/contacts",
+          "style": "primary"
+        }
+      ],
+      "schemaVersion": 1,
+      "id": "d7b8a09d-a797-4d8e-8c21-a9cc5a752d91",
+      "revision": 1,
+      "position": 1
+    },
+    {
+      "title": "Контакты",
+      "slug": "contacts",
+      "description": "Связь с компанией, отправка обращения",
+      "published": true,
+      "blocks": [
+        {
+          "id": "7e9277cd-6dfd-44fb-b35d-6a65e3ac10c0",
+          "type": "hero",
+          "eyebrow": "НА СВЯЗИ",
+          "title": "Давайте обсудим вашу задачу.",
+          "subtitle": "Заполните форму — обращение появится в защищённой административной панели."
+        },
+        {
+          "id": "42849a60-a0a8-4cfc-97a3-a1a4854eecc8",
+          "type": "form",
+          "title": "Написать нам",
+          "submitLabel": "Отправить обращение"
+        }
+      ],
+      "schemaVersion": 1,
+      "id": "d7b8a09d-a797-4d8e-8c22-a9cc5a752d92",
+      "revision": 1,
+      "position": 2
+    }
+  ],
+  "entities": []
+}

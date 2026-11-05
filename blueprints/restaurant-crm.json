@@ -1,0 +1,19 @@
+{
+  "id": "restaurant-crm",
+  "version": "0.3.0",
+  "type": "crm",
+  "industry": "restaurant",
+  "title": "Restaurant CRM",
+  "description": "Clients, visits, tasks, management analytics and manual payment ledger",
+  "supportedModules": ["auth", "clients", "analytics", "tasks", "payments"],
+  "requiredModules": ["auth"],
+  "moduleDependencies": { "analytics": ["clients"] },
+  "roles": ["admin", "manager", "staff"],
+  "paymentMode": "manual_ledger_only",
+  "actions": ["new_client", "new_task", "new_payment", "navigate_clients", "navigate_overview"],
+  "defaults": {
+    "name": "Ресторан · CRM",
+    "modules": ["auth", "clients", "analytics", "tasks", "payments"],
+    "settings": { "accent": "#91aaff", "primaryAction": "new_client", "currency": "RUB" }
+  }
+}

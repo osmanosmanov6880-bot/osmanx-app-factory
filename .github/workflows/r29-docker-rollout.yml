@@ -1,0 +1,29 @@
+name: R2.9 isolated Docker rollout E2E
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'templates/deploy/rollout-observe.mjs'
+      - 'templates/deploy/upgrade.mjs'
+      - 'scripts/r29_docker_e2e.mjs'
+      - 'tests/r29_rollout.test.mjs'
+      - '.github/workflows/r29-docker-rollout.yml'
+permissions:
+  contents: read
+jobs:
+  isolated-docker-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Node regression tests
+        run: npm test
+      - name: Pull test-only Docker image
+        run: docker pull node:22-bookworm-slim
+      - name: Isolated, no-ports container observation test
+        run: npm run docker:e2e:r29
+      - name: R2.8 real volume migration test
+        run: npm run docker:e2e

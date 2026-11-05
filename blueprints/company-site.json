@@ -1,0 +1,18 @@
+{
+  "id": "company-site",
+  "version": "0.5.0",
+  "type": "site",
+  "industry": "business",
+  "title": "Корпоративный сайт",
+  "description": "Публичные страницы, CMS, контактные формы, заявки и SEO",
+  "supportedModules": ["auth", "cms", "leads"],
+  "requiredModules": ["auth", "cms"],
+  "moduleDependencies": {},
+  "roles": ["admin"],
+  "paymentMode": "no_payments",
+  "defaults": {
+    "name": "Новая компания · сайт",
+    "modules": ["auth", "cms", "leads"],
+    "settings": { "accent": "#d0a976", "tagline": "", "contactEmail": "" }
+  }
+}

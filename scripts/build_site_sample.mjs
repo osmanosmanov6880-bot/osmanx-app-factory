@@ -1,0 +1,12 @@
+import {randomUUID} from 'node:crypto';
+import {writeFileSync} from 'node:fs';
+import {resolve,dirname} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {exportProject} from '../src/studio/export.mjs';
+import {makeSitePages} from '../src/site/model.mjs';
+const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
+const outfile=resolve(process.argv[2]||'./osmanx-demo-website.zip');
+const pages=makeSitePages('OSMANX ATELIER').map((p,i)=>({...p,id:randomUUID(),revision:1,position:i}));
+const project={id:randomUUID(),name:'OSMANX ATELIER',type:'site',industry:'business',modules:['auth','cms','leads'],settings:{accent:'#d0a976',tagline:'Продуманные решения для бизнеса',contactEmail:'hello@example.com'},pages,entities:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+writeFileSync(outfile,await exportProject(project,root));
+console.log(`Created ${outfile} (${pages.length} pages, no customer data)`);

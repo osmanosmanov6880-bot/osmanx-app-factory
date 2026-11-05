@@ -1,0 +1,79 @@
+name: R3.2 signed release, backup drill and Docker acceptance
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'templates/deploy/**'
+      - 'src/studio/deployment.mjs'
+      - 'public/studio/deploy.js'
+      - 'scripts/r32_offline_acceptance.mjs'
+      - 'tests/r32_*.test.mjs'
+      - '.github/workflows/r32-release-acceptance.yml'
+  push:
+    paths:
+      - 'templates/deploy/**'
+      - 'src/studio/deployment.mjs'
+      - 'public/studio/deploy.js'
+      - 'scripts/r32_offline_acceptance.mjs'
+      - 'tests/r32_*.test.mjs'
+      - '.github/workflows/r32-release-acceptance.yml'
+permissions:
+  contents: read
+concurrency:
+  group: r32-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  offline-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Syntax and full regression
+        run: npm run check && npm test
+      - name: Signed export and real SQLite disposable restore drill (no network)
+        run: |
+          mkdir -p artifacts
+          npm run acceptance:r32 -- --out="${PWD}/artifacts/r32-offline-acceptance.json"
+      - name: Upload synthetic offline evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r32-offline-acceptance
+          path: artifacts/r32-offline-acceptance.json
+          if-no-files-found: warn
+          retention-days: 7
+  docker-acceptance:
+    needs: offline-acceptance
+    # This job runs on a fresh GitHub-hosted Linux runner, never on a customer VPS.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Verify Docker and Compose
+        run: docker info && docker compose version
+      - name: Pull synthetic-only base image
+        run: docker pull node:22-bookworm-slim
+      - name: Isolated volume migration and recovery test
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          npm run docker:e2e 2>&1 | tee artifacts/r32-volume-docker.log
+      - name: Signed release upgrade, rollback and forward recovery
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          npm run docker:e2e:r31 2>&1 | tee artifacts/r32-signed-rollout-docker.log
+      - name: Upload synthetic-only Docker evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r32-docker-acceptance
+          path: artifacts/r32-*.log
+          if-no-files-found: warn
+          retention-days: 7

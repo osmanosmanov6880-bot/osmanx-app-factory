@@ -1,0 +1,31 @@
+name: R3.0 signed releases and isolated Docker upgrade
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'templates/deploy/signature.mjs'
+      - 'templates/deploy/upgrade.mjs'
+      - 'scripts/release_sign.mjs'
+      - 'scripts/r30_docker_e2e.mjs'
+      - 'src/studio/deployment.mjs'
+      - 'tests/r30_signing.test.mjs'
+      - '.github/workflows/r30-signed-release.yml'
+permissions:
+  contents: read
+jobs:
+  signature-and-docker-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Verify source and offline signature regression
+        run: npm run check && npm test
+      - name: Pre-pull only the synthetic test image
+        run: docker pull node:22-bookworm-slim
+      - name: Real isolated Docker signed-upgrade and rollback E2E
+        run: npm run docker:e2e:r30
+      - name: Existing real volume migration and stability suites
+        run: npm run docker:e2e && npm run docker:e2e:r29

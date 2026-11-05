@@ -1,0 +1,25 @@
+name: R2.8 Docker volume migration validation
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'templates/deploy/volume-migrate.mjs'
+      - 'src/studio/deployment.mjs'
+      - 'scripts/r28_docker_e2e.mjs'
+      - 'tests/r28_volume_resilience.test.mjs'
+      - '.github/workflows/r28-docker-volume.yml'
+jobs:
+  docker-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - run: npm run check && npm test
+      - run: docker pull node:22-bookworm-slim
+      - name: Isolated Docker migration and injected rollback test
+        run: node scripts/r28_docker_e2e.mjs --confirm-isolated-test

@@ -1,0 +1,77 @@
+name: R3.5 isolated regression and safe Docker acceptance
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/**'
+      - 'templates/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'public/studio/**'
+      - '.github/workflows/r35-isolated-release-acceptance.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'templates/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'public/studio/**'
+      - '.github/workflows/r35-isolated-release-acceptance.yml'
+permissions:
+  contents: read
+concurrency:
+  group: r35-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Source and browser syntax
+        run: npm run check
+      - name: Isolated tests plus synthetic load/crash/release evidence
+        run: |
+          mkdir -p artifacts
+          npm run acceptance:r35 -- --out="${PWD}/artifacts/r35-local-acceptance.json"
+      - name: Archive offline-only evidence (even if regression fails)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r35-offline-evidence
+          path: artifacts/r35-local-acceptance.json
+          if-no-files-found: warn
+          retention-days: 7
+  docker:
+    needs: regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Verify real Docker daemon and Compose plugin
+        run: docker info && docker compose version
+      - name: Pull pinned synthetic base image
+        run: docker pull node:22-bookworm-slim
+      - name: Isolated signed fleet CRM/site Docker smoke
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          npm run docker:e2e:r34 2>&1 | tee artifacts/r35-fleet-docker.log
+      - name: Signed version upgrade, rollback and forward-resume
+        run: |
+          set -o pipefail
+          npm run docker:e2e:r31 2>&1 | tee artifacts/r35-docker-upgrade.log
+      - name: Archive Docker-only evidence (including failures)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r35-docker-evidence
+          path: artifacts/r35-*.log
+          if-no-files-found: warn
+          retention-days: 7

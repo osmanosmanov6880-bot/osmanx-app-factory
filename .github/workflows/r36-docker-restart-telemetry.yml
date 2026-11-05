@@ -1,0 +1,72 @@
+name: R3.6 synthetic Docker restart and privacy-safe diagnostics
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/common/**'
+      - 'src/studio/fleet.mjs'
+      - 'src/studio/deployment.mjs'
+      - 'templates/**'
+      - 'scripts/r36_*'
+      - 'tests/r36_*'
+      - 'public/studio/deploy.js'
+      - '.github/workflows/r36-docker-restart-telemetry.yml'
+  pull_request:
+    paths:
+      - 'src/common/**'
+      - 'src/studio/fleet.mjs'
+      - 'src/studio/deployment.mjs'
+      - 'templates/**'
+      - 'scripts/r36_*'
+      - 'tests/r36_*'
+      - '.github/workflows/r36-docker-restart-telemetry.yml'
+permissions:
+  contents: read
+concurrency:
+  group: r36-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Validate generated source and browser syntax
+        run: npm run check
+      - name: Full Node regression with bounded per-test isolation
+        run: npm run test:isolated
+      - name: Privacy and security tests for R3.6
+        run: npm run test:r36
+  docker:
+    needs: regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Check actual Docker and Compose availability
+        run: docker info && docker compose version
+      - name: Pull synthetic-only Node image
+        run: docker pull node:22-bookworm-slim
+      - name: Real Docker process restart and data durability with zero ports published
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          npm run docker:e2e:r36 2>&1 | tee artifacts/r36-docker-restart.log
+      - name: Existing signed upgrade/rollback/forward resume integration
+        run: |
+          set -o pipefail
+          npm run docker:e2e:r31 2>&1 | tee artifacts/r36-signed-upgrade.log
+      - name: Preserve synthetic-only logs for audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r36-synthetic-docker-evidence
+          path: artifacts/r36-*.log
+          if-no-files-found: warn
+          retention-days: 7

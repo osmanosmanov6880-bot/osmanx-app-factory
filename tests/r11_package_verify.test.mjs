@@ -1,0 +1,20 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {createHash,randomUUID} from 'node:crypto';
+import {exportProject} from '../src/studio/export.mjs';
+import {createIndustryPack} from '../src/studio/industries.mjs';
+import {parseStoredZip} from '../src/common/archive.mjs';
+import {createZip} from '../src/common/zip.mjs';
+import {verifyStandalonePackage} from '../src/common/package_verify.mjs';
+const root=new URL('../',import.meta.url).pathname;
+const modules=['auth','clients','tasks','analytics','payments'];
+test('R1.1 ZIP manifest verification guards every file and excludes live DBs',async()=>{
+ const pack=createIndustryPack('dental',modules);
+ const project={id:randomUUID(),name:'Verified Dental',type:'crm',industry:'dental',modules,settings:{accent:'#d5b078',currency:'RUB',primaryAction:'new_client'},pages:pack.pages,entities:pack.entities,automationPresets:[]};
+ const zip=await exportProject(project,root);const good=verifyStandalonePackage(zip);
+ assert.equal(good.ok,true);assert.equal(good.type,'crm');assert.ok(good.fileCount>10);
+ const entries=parseStoredZip(zip);
+ const modified=[...entries].map(([name,data])=>({name,data:name==='README.md'?Buffer.from('TAMPER'):data}));
+ assert.throws(()=>verifyStandalonePackage(createZip(modified)),/hash mismatch/i);
+ const withDb=[...entries].map(([name,data])=>({name,data}));withDb.push({name:'data/crm.sqlite',data:Buffer.from('private')});
+ assert.throws(()=>verifyStandalonePackage(createZip(withDb)),/count mismatch/i);
+});

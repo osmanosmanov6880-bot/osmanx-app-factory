@@ -1,0 +1,77 @@
+name: R3.4 signed offline fleet and isolated Docker acceptance
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'templates/deploy/**'
+      - 'src/studio/**'
+      - 'public/studio/**'
+      - 'scripts/r34_*.mjs'
+      - 'tests/r34_*'
+      - '.github/workflows/r34-fleet-docker-acceptance.yml'
+  push:
+    paths:
+      - 'templates/deploy/**'
+      - 'src/studio/**'
+      - 'public/studio/**'
+      - 'scripts/r34_*.mjs'
+      - 'tests/r34_*'
+      - '.github/workflows/r34-fleet-docker-acceptance.yml'
+permissions:
+  contents: read
+concurrency:
+  group: r34-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Static checks and full regression
+        run: npm run check && npm test
+      - name: Offline release, signed fleet snapshots, local load and SIGKILL recovery
+        run: |
+          mkdir -p artifacts
+          npm run acceptance:r34 -- --out="${PWD}/artifacts/r34-local-acceptance.json"
+      - name: Archive synthetic-only evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r34-offline-acceptance
+          path: artifacts/r34-local-acceptance.json
+          if-no-files-found: warn
+          retention-days: 7
+  docker:
+    needs: offline
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Assert real Docker daemon and Compose plugin
+        run: docker info && docker compose version
+      - name: Pull synthetic Node runtime image
+        run: docker pull node:22-bookworm-slim
+      - name: Run isolated CRM and site containers and check signed fleet identity
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          npm run docker:e2e:r34 2>&1 | tee artifacts/r34-docker-fleet.log
+      - name: Run existing signed upgrade and rollback Docker acceptance
+        run: |
+          set -o pipefail
+          npm run docker:e2e:r31 2>&1 | tee artifacts/r34-docker-upgrade.log
+      - name: Archive Docker-only evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r34-docker-evidence
+          path: artifacts/r34-docker-*.log
+          if-no-files-found: warn
+          retention-days: 7

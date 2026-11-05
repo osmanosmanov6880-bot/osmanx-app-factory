@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="OSMANX APP FACTORY — конструктор независимых бизнес-приложений">
+  <title>OSMANX APP FACTORY — Конструктор приложений</title>
+  <link rel="stylesheet" href="/assets/studio/app.css">
+  <script type="module" src="/assets/studio/app.js"></script>
+</head>
+<body>
+<div id="authScreen" class="auth-screen" hidden>
+  <div class="auth-brand"><div class="mark">O<span>✦</span></div><p>OSMANX / APP FACTORY</p><h1>Продукты начинаются<br>с архитектуры.</h1><div class="auth-art" aria-hidden="true"><span class="orbit orbit1"></span><span class="orbit orbit2"></span><span class="core">O</span></div><div class="auth-foot">Реальный код. Независимые проекты. Контроль в твоих руках.</div></div>
+  <div class="auth-panel"><div class="auth-card"><span class="eyebrow">РАБОЧАЯ ОБЛАСТЬ</span><h2 id="authTitle">Войти в мастерскую</h2><p id="authSubtitle">Войдите, чтобы управлять проектами и шаблонами.</p><form id="authForm"><div id="nameField" class="field" hidden><label for="authName">Ваше имя</label><input id="authName" autocomplete="name" placeholder="Имя администратора"></div><div class="field"><label for="authEmail">Email</label><input id="authEmail" type="email" required autocomplete="username" placeholder="you@company.com"></div><div class="field"><label for="authPassword">Пароль</label><input id="authPassword" type="password" required autocomplete="current-password" placeholder="Минимум 12 символов"></div><div id="setupTokenWrap" class="field" hidden><label for="setupToken">Ключ первоначальной установки</label><input id="setupToken" type="password" autocomplete="off" placeholder="SETUP_TOKEN из настроек сервера"></div><button class="btn btn-primary btn-block" type="submit" id="authSubmit">Войти в систему <span>↗</span></button></form><p class="auth-hint" id="authHint">Доступ только для владельца рабочей области.</p></div></div>
+</div>
+<div id="studioScreen" hidden>
+  <div class="app-shell">
+    <aside class="sidebar luxury-sidebar">
+  <div class="logo luxury-logo"><span class="brand-ring" aria-hidden="true"></span><span><strong>OSMANX</strong><small>APP FACTORY</small></span></div>
+  <nav class="luxury-nav" aria-label="Навигация">
+    <button class="nav-item active" id="navOverview" type="button"><svg class="ui-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg><span>Главная</span></button>
+    <button class="nav-item" id="navProjects" type="button"><svg class="ui-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 2 9 5-9 5-9-5 9-5Zm-9 10 9 5 9-5M3 17l9 5 9-5"/></svg><span>Проекты</span><span class="nav-count" id="navProjectCount">0</span></button>
+    <button class="nav-item" id="navWorkspace" type="button"><span class="nav-icon">◈</span><span>Мастерская</span></button>
+    <button class="nav-item" id="navBlueprint" type="button"><svg class="ui-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>Шаблоны</span></button>
+    <button class="nav-item nav-builder" id="navBuilder" type="button" aria-expanded="true" aria-controls="builderSubnav"><svg class="ui-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 1.8 6.2L20 11l-6.2 1.8L12 19l-1.8-6.2L4 11l6.2-1.8L12 3ZM19 18l.8 2.2L22 21l-2.2.8L19 24l-.8-2.2L16 21l2.2-.8L19 18Z"/></svg><span>Конструктор</span><svg class="ui-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+    <div class="nav-sub" id="builderSubnav">
+      <button type="button" id="navPages">Страницы</button>
+      <button type="button" id="navEntities">База данных</button>
+      <button type="button" id="navComponents">Компоненты</button>
+    </div>
+    <button class="nav-item" id="navAutomation" type="button"><svg class="ui-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m13 2-9 12h7l-1 8 10-12h-7z"/></svg><span>Автоматизация</span></button>
+    <button class="nav-item" id="navTeam" type="button"><svg class="ui-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Команда</span></button>
+    <button class="nav-item" id="navSettings" type="button"><svg class="ui-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06-1.9 1.9-.06-.06A1.65 1.65 0 0 0 16 18.4a1.65 1.65 0 0 0-1 .89V21h-3v-1.71a1.65 1.65 0 0 0-1-.89 1.65 1.65 0 0 0-1.82.33l-.06.06-1.9-1.9.06-.06A1.65 1.65 0 0 0 7.6 15a1.65 1.65 0 0 0-.89-1H5v-3h1.71a1.65 1.65 0 0 0 .89-1 1.65 1.65 0 0 0-.33-1.82L7.21 8.1l1.9-1.9.06.06A1.65 1.65 0 0 0 11 6.6a1.65 1.65 0 0 0 1-.89V4h3v1.71a1.65 1.65 0 0 0 1 .89 1.65 1.65 0 0 0 1.82-.33l.06-.06 1.9 1.9-.06.06A1.65 1.65 0 0 0 19.4 10a1.65 1.65 0 0 0 .89 1H22v3h-1.71a1.65 1.65 0 0 0-.89 1z" transform="translate(-1.5 -1.5) scale(1.08)"/></svg><span>Настройки</span></button>
+  </nav>
+  <div class="side-spacer"></div>
+  <div class="side-plan"><div class="side-plan-title"><svg class="ui-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m2 7 5 5 5-7 5 7 5-5-2 13H4L2 7z"/></svg><strong>OSMANX Pro</strong></div><p>Все доступные инструменты<br>в вашей мастерской</p><button type="button" id="navPlan">Возможности платформы <span>→</span></button></div>
+  <div class="side-bottom"><span class="side-local-dot"></span><span>Локальная версия <b>R1.3</b></span><button class="icon-button" id="logoutButton" title="Выйти" aria-label="Выйти" type="button">↗</button></div>
+</aside>
+    <div class="workspace">
+      <header class="topbar luxury-topbar">
+  <div class="global-search"><svg class="ui-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.8" cy="10.8" r="7.7"/><path d="m16.5 16.5 5.2 5.2"/></svg><input id="globalSearch" type="search" autocomplete="off" placeholder="Найти проект, шаблон или функцию…" aria-label="Поиск проектов и шаблонов"><kbd>⌘ K</kbd></div>
+  <div class="top-actions"><button class="notification-button" id="notificationButton" aria-label="Уведомления" title="Уведомления" type="button"><svg class="ui-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4"/></svg><span class="notification-dot"></span></button>
+    <div class="top-profile"><img src="/assets/studio/media/profile-avatar.png" alt="" width="43" height="43"><div class="top-profile-text"><strong id="userName">Владелец</strong><span>Владелец</span></div><button id="profileToggle" aria-label="Открыть меню профиля" type="button"><svg class="ui-icon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><div class="profile-menu" id="profileMenu" hidden><span>Локальная мастерская OSMANX</span><button type="button" id="profileLogout">Выйти из аккаунта</button></div></div>
+  </div>
+</header>
+      <main class="content">
+<div class="luxury-dashboard" id="dashboardRoot">
+<div class="dashboard-primary">
+  <section class="hero-panel" aria-labelledby="heroHeading"><div class="hero-art" aria-hidden="true"></div><div class="hero-copy"><div class="hero-eyebrow">КОНСТРУКТОР БИЗНЕС-ПРИЛОЖЕНИЙ</div><h1 id="heroHeading">Создавай CRM, сайты<br>и сервисы без кода</h1><p>Готовые бизнес-решения. Настрой под себя. Запусти быстрее.</p></div></section>
+  <div class="product-tiles" aria-label="Выбор типа продукта">
+    <button class="product-tile selected" type="button" data-start-type="crm"><span class="tile-icon tile-icon-crm"><span class="layer-a"></span><span class="layer-b"></span><span class="layer-c"></span></span><span class="tile-copy"><strong>CRM-система</strong><small>Управление клиентами,<br>продажами и процессами</small></span><span class="tile-arrow"><svg class="ui-icon" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></span></button>
+    <button class="product-tile" type="button" data-start-type="site"><span class="tile-icon tile-icon-site"><i></i><i></i><i></i></span><span class="tile-copy"><strong>Сайт</strong><small>Современный сайт для<br>бизнеса, услуг или бренда</small></span><span class="tile-arrow"><svg class="ui-icon" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></span></button>
+    <button class="product-tile future-tile" type="button" id="futureMobile"><span class="tile-icon tile-icon-mobile"><svg class="ui-icon" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/></svg></span><span class="tile-copy"><strong>Мобильное<br>приложение</strong><small>iOS и Android —<br>следующий этап</small></span><span class="tile-arrow"><svg class="ui-icon" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></span></button>
+  </div>
+  <div class="feature-row" aria-label="Инструменты фабрики"><button type="button" data-feature="templates"><svg class="ui-icon" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>Готовые шаблоны</span></button><button type="button" data-feature="modules"><svg class="ui-icon" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 2 9 5v10l-9 5-9-5V7l9-5ZM3 7l9 5 9-5M12 12v10"/></svg><span>Модули и функции</span></button><button type="button" data-feature="design"><svg class="ui-icon" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 0 0 0 18h1a2 2 0 0 0 1.3-3.5 1.7 1.7 0 0 1 .9-3h2A4 4 0 0 0 21 10a9 9 0 0 0-9-7Z"/><circle cx="7" cy="11" r="1"/><circle cx="12" cy="7" r="1"/><circle cx="17" cy="10" r="1"/></svg><span>Дизайн и стиль</span></button><button type="button" data-feature="database"><svg class="ui-icon" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></svg><span>Своя база данных</span></button><button type="button" data-feature="automation"><svg class="ui-icon" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m13 2-9 12h7l-1 8 10-12h-7z"/></svg><span>Автоматизация</span></button><button type="button" data-feature="team"><svg class="ui-icon" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Команда и доступы</span></button></div>
+          <section class="projects-section" id="projectsSection"><div class="section-heading"><div><h2>Мои проекты</h2><span class="projects-total" id="projectsLabel">0 проектов</span></div><div class="projects-view-actions"><button type="button" id="projectsGridView" class="active" title="Карточки" aria-label="Карточки"><svg class="ui-icon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button><button type="button" id="projectsListView" title="Список" aria-label="Список">☰</button><select id="projectSort" aria-label="Порядок проектов"><option value="newest">По дате создания</option><option value="oldest">Сначала старые</option><option value="name">По названию</option></select></div></div><div class="projects-grid" id="projectsList"><div class="empty-projects"><div class="empty-symbol">◫</div><strong>Здесь появятся ваши проекты</strong><p>Создайте первую CRM, чтобы получить исходники и отдельную рабочую область.</p></div></div></section>
+
+</div>
+<aside class="dashboard-rail" aria-label="Быстрые действия и информация"><button class="rail-create" id="topCreate" type="button"><svg class="ui-icon" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Создать проект</span></button>
+  <div class="rail-title">Как это работает?</div><div class="rail-steps"><div class="rail-step"><span>1</span><div><strong>Выбери основу</strong><small>CRM или сайт</small></div></div><div class="rail-step"><span>2</span><div><strong>Настрой под бизнес</strong><small>Модули, страницы, данные, дизайн</small></div></div><div class="rail-step"><span>3</span><div><strong>Запусти проект</strong><small>Получи готовое решение<br>и управляй им</small></div></div></div>
+  <div class="rail-metrics"><div><svg class="ui-icon" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21V10h4v11M10 21V4h4v17M16 21v-8h4v8"/></svg><span>Активные проекты</span><strong id="projectCount">0</strong></div><div><svg class="ui-icon" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>CRM-проекты</span><strong id="crmCount">0</strong></div><div><svg class="ui-icon" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></svg><span>Сайты</span><strong id="siteCount">0</strong></div></div>
+  <div class="rail-landscape" aria-hidden="true"></div>
+  <p class="rail-hint">Созданные проекты работают независимо от конструктора.</p>
+</aside>
+</div>
+        <div id="overviewView" class="wizard-overlay" role="dialog" aria-modal="true" aria-labelledby="wizardHeading" hidden><button type="button" class="wizard-dismiss" id="wizardDismiss" aria-label="Закрыть конструктор">×</button>
+          <div class="section-heading creation-heading"><div><span class="eyebrow">МАСТЕР СОЗДАНИЯ</span><h2 id="wizardHeading">Создание проекта</h2><p class="section-description">Никакой лишней сложности. Три шага — и основа приложения готова.</p></div><span class="section-small">Обычно достаточно нескольких настроек</span></div>
+          <div class="wizard-progress" aria-label="Шаги создания проекта">
+            <button type="button" class="wizard-step active" data-wizard-to="1" aria-current="step"><span class="wizard-step-number">01</span><span><strong>Основа</strong><small>Что создаём</small></span></button>
+            <span class="wizard-line" aria-hidden="true"></span>
+            <button type="button" class="wizard-step" data-wizard-to="2"><span class="wizard-step-number">02</span><span><strong>Возможности</strong><small>Нужные функции</small></span></button>
+            <span class="wizard-line" aria-hidden="true"></span>
+            <button type="button" class="wizard-step" data-wizard-to="3"><span class="wizard-step-number">03</span><span><strong>Оформление</strong><small>Последние штрихи</small></span></button>
+          </div>
+          <form class="builder-grid" id="projectForm">
+            <div class="wizard-main">
+              <section class="panel design-panel wizard-panel" data-wizard-panel="1">
+                <div class="panel-heading"><span class="step-tag">01</span><div><h3>Какой продукт создаём?</h3><p>Выберите основу — остальные детали подстроятся автоматически.</p></div></div>
+                <div class="product-choice" aria-label="Тип приложения">
+                  <button class="product-choice-card selected" type="button" data-type-choice="crm" aria-pressed="true"><span class="product-glyph">▦</span><span><strong>CRM-система</strong><small>Клиенты, задачи, аналитика и рабочие процессы</small></span><span class="choice-indicator" aria-hidden="true">✓</span></button>
+                  <button class="product-choice-card" type="button" data-type-choice="site" aria-pressed="false"><span class="product-glyph">◧</span><span><strong>Корпоративный сайт</strong><small>Страницы, формы заявок и управление контентом</small></span><span class="choice-indicator" aria-hidden="true">✓</span></button>
+                </div>
+                <div class="visually-hidden"><label for="projectType">Тип приложения</label><select id="projectType" tabindex="-1"><option value="crm">CRM-система</option><option value="site">Корпоративный сайт</option></select></div>
+                <div class="wizard-fields"><div class="field"><label for="projectName">Название вашего проекта</label><input id="projectName" maxlength="80" required value="Ресторан · CRM" placeholder="Например, Atmosphere CRM"><p class="help-text">Это название будет отображаться внутри приложения.</p></div>
+                <div class="field"><label for="projectIndustry">Готовый шаблон</label><div class="select-wrap"><select id="projectIndustry"><option value="restaurant">Ресторан или кофейня</option><option value="dental">Стоматология</option><option value="auto">Автосервис</option><option value="beauty">Салон красоты</option><option value="retail">Магазин одежды</option><option value="business">Универсальная компания</option></select></div><p class="help-text">Выберите направление: фабрика добавит рабочие таблицы, формы и стартовую страницу.</p></div></div>
+              </section>
+              <section class="panel modules-panel wizard-panel" data-wizard-panel="2" hidden>
+                <div class="panel-heading"><span class="step-tag">02</span><div><h3>Что должно уметь приложение?</h3><p>Оставьте только необходимые функции. Их можно настроить позднее.</p></div></div>
+                <div class="module-list" id="crmModuleList">
+                  <label class="module-option"><span class="module-icon">♙</span><span class="module-description"><strong>Вход и права доступа</strong><small>Администратор, менеджер и сотрудник</small></span><input type="checkbox" value="auth" data-module checked disabled><span class="custom-check">✓</span></label>
+                  <label class="module-option"><span class="module-icon">◎</span><span class="module-description"><strong>Клиенты и визиты</strong><small>Профили гостей и история посещений</small></span><input type="checkbox" value="clients" data-module checked><span class="custom-check">✓</span></label>
+                  <label class="module-option"><span class="module-icon">▥</span><span class="module-description"><strong>Аналитика</strong><small>Возвращаемость гостей и показатели</small></span><input type="checkbox" value="analytics" data-module checked><span class="custom-check">✓</span></label>
+                  <label class="module-option"><span class="module-icon">☑</span><span class="module-description"><strong>Задачи команды</strong><small>Ответственные, сроки и приоритеты</small></span><input type="checkbox" value="tasks" data-module checked><span class="custom-check">✓</span></label>
+                  <label class="module-option"><span class="module-icon">₽</span><span class="module-description"><strong>Учёт платежей</strong><small>Журнал операций, без приёма денег</small></span><input type="checkbox" value="payments" data-module checked><span class="custom-check">✓</span></label>
+                </div>
+                <div class="module-list" id="siteModuleList" hidden>
+                  <label class="module-option"><span class="module-icon">♙</span><span class="module-description"><strong>Защищённый вход</strong><small>Доступ к панели администратора</small></span><input type="checkbox" data-site-module value="auth" checked disabled><span class="custom-check">✓</span></label>
+                  <label class="module-option"><span class="module-icon">◫</span><span class="module-description"><strong>Редактор страниц</strong><small>Редактирование текста и публикация</small></span><input type="checkbox" data-site-module value="cms" checked disabled><span class="custom-check">✓</span></label>
+                  <label class="module-option"><span class="module-icon">✉</span><span class="module-description"><strong>Заявки посетителей</strong><small>Контактная форма и учёт обращений</small></span><input type="checkbox" data-site-module value="leads" checked><span class="custom-check">✓</span></label>
+                </div>
+                <p class="wizard-explain">Всё выбранное подключается к настоящей базе данных и серверу. Обязательные модули защищены от отключения.</p>
+              </section>
+              <section class="panel deploy-panel wizard-panel" data-wizard-panel="3" hidden>
+                <div class="panel-heading"><span class="step-tag">03</span><div><h3>Оформление и настройки</h3><p>Выберите детали, с которых начнётся ваш продукт.</p></div></div>
+                <div class="wizard-fields">
+                  <div class="field"><label for="projectColor">Фирменный цвет</label><div class="color-field"><input type="color" id="projectColor" value="#91aaff" aria-label="Фирменный цвет"><span id="colorCode">#91AAFF</span><span>Можно изменить позже</span></div></div>
+                  <div class="field" id="crmActionWrap"><label for="projectAction">Действие главной кнопки</label><div class="select-wrap"><select id="projectAction"><option value="new_client">Добавить клиента</option><option value="new_task">Создать задачу</option><option value="new_payment">Учесть оплату</option><option value="navigate_clients">Перейти к клиентам</option><option value="navigate_overview">Открыть обзор</option></select></div></div>
+                  <div class="field" id="crmCurrencyWrap"><label for="projectCurrency">Валюта учёта</label><div class="select-wrap"><select id="projectCurrency"><option value="RUB">Российский рубль (₽)</option><option value="EUR">Евро (€)</option><option value="USD">Доллар ($)</option></select></div></div>
+                  <div class="field" id="siteTaglineWrap" hidden><label for="projectTagline">Короткое описание компании</label><input id="projectTagline" maxlength="100" placeholder="Например, решаем сложные задачи просто"></div>
+                  <div class="field" id="siteEmailWrap" hidden><label for="projectContactEmail">Электронная почта для связи</label><input id="projectContactEmail" type="email" maxlength="254" placeholder="office@example.com"></div>
+                </div>
+                <div class="output-card"><div class="output-title">✓ <span>Что вы получите</span></div><div class="output-points"><span>Самостоятельное приложение</span><span>Свой исходный код</span><span>База данных</span><span>ZIP-архив</span></div></div>
+              </section>
+            </div>
+            <aside class="wizard-aside" aria-label="Результат настройки">
+              <div class="wizard-aside-top"><span class="eyebrow">ВАШ ПРОЕКТ</span><span class="preview-chip">Живые настройки</span></div>
+              <div class="project-preview-art" aria-hidden="true"><div class="art-top"><span class="art-symbol">O</span><span class="art-dots"><i></i><i></i><i></i></span></div><div class="art-main"><span class="art-line art-line-short"></span><span class="art-line"></span><div class="art-stats"><b></b><b></b><b></b></div><span class="art-line art-line-bottom"></span></div></div>
+              <p class="preview-kicker">ВЫБРАННЫЙ ШАБЛОН</p>
+              <h3 id="blueprintName">Ресторанная CRM</h3>
+              <p id="blueprintDescription" class="preview-description">Клиенты, задачи, аналитика и учёт платежей — на собственной базе данных.</p>
+              <div class="summary-rows"><div><span>Тип продукта</span><strong id="summaryType">CRM-система</strong></div><div><span>Функции</span><strong id="summaryModules">5 модулей</strong></div><div><span>Название</span><strong id="summaryName">Ресторан · CRM</strong></div></div>
+              <div class="wizard-actions"><button class="btn btn-outline" id="builderBack" type="button" hidden>← Назад</button><button class="btn btn-primary" id="builderNext" type="button">Продолжить <span>→</span></button><button class="btn btn-primary" id="createProject" type="submit" hidden>Создать проект <span>→</span></button></div>
+              <p class="wizard-security">Исходный код останется у вас. Реальные данные клиентов не попадут в экспортированный шаблон.</p>
+            </aside>
+          </form>
+        </div>
+
+        <footer class="footer">OSMANX APP FACTORY <span>© 2026 · R1.3</span></footer>
+      </main>
+    </div>
+  </div>
+</div>
+<div class="oxw-overlay" id="workbenchOverlay" hidden>
+  <section class="oxw-shell" role="dialog" aria-modal="true" aria-labelledby="oxwTitle" tabindex="-1">
+    <header class="oxw-topbar"><div class="oxw-brand"><span class="oxw-mark">O<span>✦</span></span><div><span class="oxw-eyebrow">OSMANX / ЕДИНЫЙ КОНСТРУКТОР</span><h1 id="oxwTitle">Мастерская проекта</h1><p id="oxwSubtitle">Страницы · Данные · Кнопки · Автоматизации</p></div></div><div class="oxw-top-actions"><button id="oxwRefresh" type="button">↻ Обновить</button><button id="oxwClose" type="button" aria-label="Закрыть мастерскую">✕</button></div></header>
+    <div class="oxw-layout"><nav id="oxwTabs" class="oxw-tabs" aria-label="Разделы мастерской"></nav><main id="oxwContent" class="oxw-content" aria-live="polite"></main></div>
+    <footer class="oxw-footer">Видимые разделы управляют настоящей конфигурацией проекта. Не забудьте проверить проект перед выдачей клиенту. <span>OSMANX R1.3</span></footer>
+  </section>
+</div>
+<div class="overlay" id="projectHubOverlay" hidden>
+  <section class="modal ox-project-hub" role="dialog" aria-modal="true" aria-labelledby="projectHubTitle" tabindex="-1">
+    <div class="modal-head"><div><span class="eyebrow">OSMANX / ЕДИНАЯ МАСТЕРСКАЯ</span><h2 id="projectHubTitle">Управление проектом</h2><p id="projectHubSubtitle">От структуры данных до готового исходного кода</p></div><button class="close-button" id="projectHubClose" type="button" aria-label="Закрыть">×</button></div>
+    <div class="hub-body" id="projectHubBody" aria-live="polite"></div>
+    <p class="hub-foot">Все действия выполняются в реальных редакторах. Экспорт не содержит клиентских данных, паролей и сессий.</p>
+  </section>
+</div>
+<div class="overlay ox-workflow-overlay" id="workflowOverlay" hidden>
+  <section class="modal ox-workflow-dialog" role="dialog" aria-modal="true" aria-labelledby="workflowHeading" tabindex="-1">
+    <header class="modal-head"><div><span class="eyebrow">OSMANX / СЦЕНАРИИ БИЗНЕСА</span><h2 id="workflowHeading">Автоматизации для шаблона</h2><p id="workflowSubtitle">Создавайте правила, которые будут работать в новых CRM</p></div><button type="button" class="close-button" id="workflowClose" aria-label="Закрыть редактор сценариев">×</button></header>
+    <div class="ox-workflow-layout">
+      <form id="workflowForm" class="ox-workflow-editor">
+        <div class="ox-workflow-section-title"><span>01</span><div><strong>Когда происходит событие</strong><small>Выберите причину запуска правила</small></div></div>
+        <div class="field"><label for="workflowName">Название правила</label><input id="workflowName" required maxlength="100" placeholder="Подготовка к приёму"></div>
+        <div class="field"><label for="workflowEvent">Событие</label><select id="workflowEvent"><option value="entity_created">Создана запись в таблице</option><option value="client_created">Добавлен клиент</option><option value="visit_created">Новый визит</option></select></div>
+        <div class="field" id="workflowEntityWrap"><label for="workflowEntity">Таблица данных</label><select id="workflowEntity"></select></div>
+        <div class="ox-workflow-condition" id="workflowConditionWrap"><div class="field"><label for="workflowCondition">Проверить поле (необязательно)</label><select id="workflowCondition"><option value="">Без условия — при каждой записи</option></select></div><div class="field" id="workflowValueWrap" hidden><label for="workflowValue">Значение для срабатывания</label><input id="workflowValue" maxlength="120" placeholder="Например: Подтверждена"></div></div>
+        <div class="ox-workflow-section-title"><span>02</span><div><strong>Что сделать автоматически</strong><small>Создать задачу в CRM без написания кода</small></div></div>
+        <div class="field"><label for="workflowTask">Название задачи</label><input id="workflowTask" required maxlength="180" placeholder="Подготовить кабинет: {{doctor}}"><small class="ox-workflow-help">Данные из записи: {{doctor}}. Без выполнения кода.</small></div>
+        <div class="ox-workflow-row"><div class="field"><label for="workflowPriority">Приоритет</label><select id="workflowPriority"><option value="low">Низкий</option><option value="medium" selected>Обычный</option><option value="high">Высокий</option></select></div><div class="field"><label for="workflowDays">Срок через (дней)</label><input id="workflowDays" type="number" min="0" max="365" step="1" value="0"></div></div>
+        <label class="ox-workflow-checkbox"><input id="workflowEnabled" type="checkbox" checked><span>Правило включено при создании новой CRM</span></label>
+        <div class="ox-workflow-buttons"><button type="button" id="workflowSimulate" class="btn btn-outline">Проверить на примере</button><button type="submit" class="btn btn-primary" id="workflowSave">Сохранить сценарий</button></div>
+        <p class="ox-workflow-result" id="workflowPreview" aria-live="polite">Проверка ничего не меняет в реальной базе данных.</p>
+      </form>
+      <aside class="ox-workflow-library"><div class="ox-workflow-library-head"><div><span class="eyebrow">СЦЕНАРИИ ПРОЕКТА</span><h3 id="workflowCount">0 правил</h3></div><button type="button" id="workflowNew" class="btn btn-outline">+ Новый</button></div><p class="ox-workflow-library-desc">Эти настройки войдут в шаблоны, копии проектов, релизы и новые ZIP. Реальные задачи и клиенты не копируются.</p><div id="workflowList" class="ox-workflow-list" aria-live="polite"></div><div class="ox-workflow-library-foot"><strong>Где управлять срабатываниями?</strong><p>В готовой CRM откройте «Автоматизации», чтобы смотреть журнал, включать и отключать рабочие правила.</p></div></aside>
+    </div>
+  </section>
+</div>
+<div class="overlay" id="settingsOverlay" hidden><div class="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle"><div class="modal-head"><div><span class="eyebrow">НАСТРОЙКИ ПРОЕКТА</span><h2 id="settingsTitle">Настройки проекта</h2></div><button class="close-button" id="closeSettings" type="button" aria-label="Закрыть">×</button></div><form id="settingsForm"><div class="field"><label for="settingsName">Название проекта</label><input id="settingsName" required maxlength="80"></div><div class="field"><label for="settingsColor">Акцентный цвет</label><input id="settingsColor" type="color"></div><div class="field" id="settingsActionWrap"><label for="settingsAction">Главное действие</label><select id="settingsAction"><option value="new_client">Добавить клиента</option><option value="new_task">Создать задачу</option><option value="new_payment">Учесть оплату</option><option value="navigate_clients">Перейти к клиентам</option><option value="navigate_overview">Открыть обзор</option></select></div><div class="field" id="settingsCurrencyWrap"><label for="settingsCurrency">Валюта</label><select id="settingsCurrency"><option>RUB</option><option>EUR</option><option>USD</option></select></div><div class="field" id="settingsTaglineWrap" hidden><label for="settingsTagline">Подпись сайта</label><input id="settingsTagline" maxlength="100"></div><div class="field" id="settingsEmailWrap" hidden><label for="settingsEmail">Контактная почта</label><input id="settingsEmail" type="email" maxlength="254"></div><div class="modal-actions"><button type="button" class="btn btn-outline" id="cancelSettings">Отмена</button><button type="submit" class="btn btn-primary">Сохранить изменения</button></div></form></div></div>
+
+<div class="overlay" id="releasesOverlay" hidden>
+  <div class="modal settings-modal release-modal" role="dialog" aria-modal="true" aria-labelledby="releaseHeading">
+    <div class="modal-head"><div><span class="eyebrow">ИСТОРИЯ ВЕРСИЙ</span><h2 id="releaseHeading">Релизы проекта</h2></div>
+      <button class="close-button" type="button" id="releaseClose" aria-label="Закрыть">×</button></div>
+    <p class="release-note">Каждый релиз фиксирует отдельную версию схем, страниц и модулей. ZIP пригоден для обновления без переноса клиентской базы.</p>
+    <div class="field"><label for="releaseNotes">Описание изменений</label><input id="releaseNotes" maxlength="240" placeholder="Что изменилось в этой версии"></div>
+    <button type="button" id="releaseCreate" class="btn btn-primary">Опубликовать версию</button>
+    <div id="releaseList" class="release-list"></div>
+    <p class="release-note">Установленная CRM: <code>node ops.mjs plan update.zip</code>, затем <code>node ops.mjs update update.zip --confirm</code>. Перед обновлением остановите CRM.</p>
+  </div>
+</div>
+<div class="overlay ox-template-overlay" id="templatesOverlay" hidden>
+  <section class="modal ox-template-dialog" role="dialog" aria-modal="true" aria-labelledby="templatesHeading" tabindex="-1">
+    <div class="modal-head ox-template-head"><div><span class="eyebrow">OSMANX / БИБЛИОТЕКА</span><h2 id="templatesHeading">Мои шаблоны</h2><p>Один раз настройте продукт — используйте его для других клиентов.</p></div><button type="button" class="close-button" id="templatesClose" aria-label="Закрыть библиотеку">×</button></div>
+    <div class="ox-template-toolbar"><div><strong id="templatesCount">0 шаблонов</strong><small>Копируются страницы, модули и структура данных. Записи клиентов не копируются.</small></div><div class="ox-template-toolbar-actions"><input type="file" id="templateImportFile" accept=".json,application/json" hidden><button id="templateImport" type="button" class="btn btn-outline">Импорт JSON</button><button id="templatesRefresh" type="button" class="btn btn-outline">Обновить</button></div></div>
+    <form id="templateSaveForm" class="ox-template-save" hidden>
+      <strong>Сохранить свой шаблон</strong><span id="templateSourceLabel"></span>
+      <div class="ox-template-save-fields"><label>Название шаблона<input id="templateSaveName" required maxlength="80" placeholder="Моя CRM для кафе"></label><label>Описание<input id="templateSaveDescription" maxlength="240" placeholder="Для какого бизнеса и какие функции"></label></div>
+      <div class="ox-template-form-actions"><button id="templateSaveCancel" class="btn btn-outline" type="button">Отмена</button><button class="btn btn-primary" type="submit" id="templateSaveSubmit">Сохранить шаблон</button></div>
+    </form>
+    <label class="ox-template-search-label" for="templatesFilter">Поиск по библиотеке</label><input id="templatesFilter" type="search" maxlength="80" placeholder="Название, тип или описание шаблона" autocomplete="off"><div id="templatesList" class="ox-template-list" aria-live="polite"></div>
+    <p class="ox-template-footnote">Шаблоны приватны для текущей мастерской. JSON-файл содержит только конфигурацию и не является сертификатом безопасности.</p>
+  </section>
+</div>
+<div class="overlay ox-template-overlay" id="projectCopyOverlay" hidden>
+  <section class="modal ox-small-dialog" role="dialog" aria-modal="true" aria-labelledby="copyHeading">
+    <div class="modal-head"><div><span class="eyebrow">НОВЫЙ ПРОЕКТ</span><h2 id="copyHeading">Сделать копию</h2></div><button class="close-button" id="copyClose" type="button" aria-label="Закрыть">×</button></div>
+    <p class="ox-small-note">Создастся отдельная CRM или сайт с такой же структурой, но без реальных данных и учётных записей.</p>
+    <form id="copyForm"><label class="ox-copy-label" for="copyName">Название нового проекта</label><input id="copyName" maxlength="80" required><div class="ox-template-form-actions"><button class="btn btn-outline" type="button" id="copyCancel">Отмена</button><button class="btn btn-primary" type="submit" id="copySubmit">Создать копию</button></div></form>
+  </section>
+</div>
+<div class="overlay ox-template-overlay" id="diagnosticsOverlay" hidden>
+  <section class="modal ox-small-dialog ox-diagnostics-dialog" role="dialog" aria-modal="true" aria-labelledby="diagnosticsHeading">
+    <div class="modal-head"><div><span class="eyebrow">ПРОВЕРКА ПЕРЕД ЭКСПОРТОМ</span><h2 id="diagnosticsHeading">Состояние проекта</h2></div><button type="button" id="diagnosticsClose" class="close-button" aria-label="Закрыть">×</button></div>
+    <p id="diagnosticsSummary" class="ox-small-note"></p><div id="diagnosticsChecks" class="ox-diagnostics-list"></div>
+    <p class="ox-template-footnote">Это проверка конфигурации, не аудит безопасности или готовности к публичному запуску.</p>
+  </section>
+</div>
+<div id="pageEditor" class="editor-screen" hidden>
+  <header class="editor-topbar">
+    <div class="editor-ident"><div class="editor-mark">O<span>✦</span></div><div><strong>OSMANX <span>РЕДАКТОР СТРАНИЦ</span></strong><small id="editorProjectName">Редактор проекта</small></div></div>
+    <div class="editor-top-center"><span id="editorStatus">Сохранено</span><small>РЕДАКТОР СТРАНИЦ · 1.3</small></div>
+    <div class="editor-top-actions"><a id="editorCrmLink" class="editor-link" target="_blank" rel="noopener">Открыть приложение ↗</a><button class="btn btn-primary" type="button" id="editorSave">Сохранить</button><button class="editor-close" id="editorClose" type="button" aria-label="Закрыть редактор">×</button></div>
+  </header>
+  <div class="editor-workspace">
+    <aside class="editor-library">
+      <div class="editor-side-section"><div class="editor-side-heading"><span>СТРАНИЦЫ ПРОЕКТА</span><button id="editorNewPage" type="button" title="Добавить страницу">+</button></div><div id="editorPageList" class="editor-page-list"></div></div>
+      <div class="editor-side-section"><div class="editor-side-heading"><span>ДОБАВИТЬ БЛОК</span></div><p class="editor-side-hint">Перетащите блок на страницу или нажмите, чтобы добавить.</p><div id="editorPalette" class="editor-palette"></div></div>
+      <div class="editor-library-foot">Схемы и действия проверяются на сервере. В ZIP попадёт исходный код с этими страницами.</div>
+    </aside>
+    <section class="editor-stage">
+      <div class="editor-canvas-top"><div><span id="editorPageTitle">Контроль сервиса</span><small id="editorPageSlug">/service</small></div><div class="editor-viewport"><button id="editorDesktop" class="active" type="button">▣ Компьютер</button><button id="editorMobile" type="button">▯ Телефон</button></div></div>
+      <div class="editor-canvas-area"><div id="editorDevice" class="editor-device"><div class="editor-page-preview-head">O <strong>OSMANX</strong><small>ПРЕДПРОСМОТР СТРАНИЦЫ</small></div><div id="editorCanvas" class="editor-canvas"></div><div class="editor-preview-foot">СОЗДАНО В OSMANX · ПРЕДПРОСМОТР</div></div></div>
+    </section>
+    <aside class="editor-properties"><div class="editor-properties-head"><span>НАСТРОЙКИ</span><span id="editorInspectorTag">СТРАНИЦА</span></div><div id="editorInspector" class="editor-inspector-content"></div></aside>
+  </div>
+</div>
+
+<div id="entityEditor" class="schema-screen" hidden>
+  <header class="schema-topbar"><div class="schema-brand"><strong>OSMANX <span>КОНСТРУКТОР ДАННЫХ</span></strong><small id="entityProjectName">Конструктор данных</small></div><div class="schema-top-middle"><span id="entityStatus">Сохранено</span><small>РЕДАКТОР ДАННЫХ · 1.3</small></div><div class="schema-top-actions"><button type="button" id="entitySave" class="btn btn-primary">Сохранить схему</button><button type="button" id="entityClose" class="schema-close" aria-label="Закрыть">×</button></div></header>
+  <div class="schema-layout">
+    <aside class="schema-nav"><div class="schema-titleline"><span>СУЩНОСТИ ПРОЕКТА</span><button id="entityNew" title="Создать таблицу" type="button">+</button></div><p class="schema-muted">Создавайте собственные таблицы: заказы, поставщики, обращения, оборудование.</p><div id="entityList"></div><div class="schema-nav-foot"><span id="entityTotal">0/12 таблиц</span><p>Изолированная база SQLite. Изменения не удаляют существующие данные.</p></div></aside>
+    <section class="schema-editor"><div class="schema-heading"><span class="eyebrow">DATA ARCHITECTURE / EDITOR</span><h1>Конструктор сущностей<span>.</span></h1><p>Опишите поля — фабрика создаст SQL-таблицу, безопасный CRUD API и интерфейс записей автоматически.</p></div>
+      <div class="schema-panel"><h2>01 <span>Основные свойства</span></h2><div class="schema-properties"><label>Название таблицы<input id="entityTitle" maxlength="64" placeholder="Заказы"></label><label>Код (латиница, без пробелов)<input id="entitySlug" maxlength="32" placeholder="orders"></label></div><label class="schema-desc-label">Назначение<textarea id="entityDescription" maxlength="240" rows="2" placeholder="Какие данные хранятся в таблице"></textarea></label></div>
+      <div class="schema-panel"><div class="schema-panel-top"><h2>02 <span>Поля таблицы</span></h2><span id="entityFieldCount">0 / 24</span></div><div id="entityFields" class="schema-fields"></div><button id="entityAddField" type="button" class="schema-add">+ Добавить поле</button><p class="schema-guard">Существующие поля можно переименовывать в интерфейсе, но нельзя удалить или изменить их тип. Новые поля в заполненной таблице добавляются необязательными — без потери данных.</p></div>
+      <div class="schema-panel"><h2>03 <span>Доступ сотрудников</span></h2><div class="schema-permissions"><label><input id="entityStaffRead" type="checkbox" checked> Сотрудник может просматривать</label><label><input id="entityManagerWrite" type="checkbox" checked> Менеджер может изменять</label><label><input id="entityStaffWrite" type="checkbox"> Сотрудник может изменять</label></div><p class="schema-guard">Администратор всегда имеет доступ. Права проверяются сервером при каждом запросе.</p></div>
+    </section>
+    <aside class="schema-preview"><div class="schema-titleline"><span>ПРЕДПРОСМОТР</span><span class="schema-live">● LIVE STRUCTURE</span></div><div class="schema-preview-card"><span class="eyebrow">CRM / GENERATED ФОРМА</span><h3 id="entityPreviewTitle">Новая таблица</h3><p id="entityPreviewSubtitle"></p><div id="entityPreview"></div><div class="schema-preview-button">+ Создать запись ↗</div></div><p class="schema-code" id="entitySqlHint"></p><div class="schema-preview-help">Форма и API будут работать с настоящими данными CRM. Этот экран показывает структуру, а не сохраняет записи.</div></aside>
+  </div>
+</div>
+<div id="toast" class="toast" hidden role="status"></div>
+</body></html>

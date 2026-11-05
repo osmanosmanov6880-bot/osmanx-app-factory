@@ -1,0 +1,75 @@
+name: R3.7 synthetic release readiness and Docker persistence
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/**'
+      - 'templates/**'
+      - 'scripts/r37_*'
+      - 'tests/r37_*'
+      - '.github/workflows/r37-release-readiness.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'templates/**'
+      - 'scripts/r37_*'
+      - 'tests/r37_*'
+      - '.github/workflows/r37-release-readiness.yml'
+permissions:
+  contents: read
+concurrency:
+  group: r37-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  local-security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Syntax and package integrity
+        run: npm run check
+      - name: Full isolated local regression, synthetic load and crash recovery
+        run: |
+          mkdir -p artifacts
+          npm run acceptance:r37 -- --out="${PWD}/artifacts/r37-local-acceptance.json"
+      - name: Preserve local-only evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r37-local-evidence
+          path: artifacts/r37-local-acceptance.json
+          if-no-files-found: warn
+          retention-days: 7
+  real-docker:
+    needs: local-security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Require the real Docker daemon and Compose plugin
+        run: docker info && docker compose version
+      - name: Pull synthetic base image
+        run: docker pull node:22-bookworm-slim
+      - name: Real internal HTTP traffic, graceful/SIGKILL restart, SQLite durability
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          npm run docker:e2e:r37 2>&1 | tee artifacts/r37-docker-traffic.log
+      - name: Real signed upgrade, rollback and cautious forward resume
+        run: |
+          set -o pipefail
+          npm run docker:e2e:r31 2>&1 | tee artifacts/r37-signed-upgrade.log
+      - name: Preserve only synthetic Docker evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r37-synthetic-docker-evidence
+          path: artifacts/r37-*.log
+          if-no-files-found: warn
+          retention-days: 7

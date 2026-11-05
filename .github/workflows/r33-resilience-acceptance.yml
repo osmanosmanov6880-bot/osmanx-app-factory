@@ -1,0 +1,80 @@
+name: R3.3 concurrency, crash recovery, Docker acceptance
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/common/request-drain.mjs'
+      - 'templates/deploy/**'
+      - 'templates/standalone/**'
+      - 'src/studio/deployment.mjs'
+      - 'scripts/r33_*.mjs'
+      - 'tests/r33_*.test.mjs'
+      - '.github/workflows/r33-resilience-acceptance.yml'
+  push:
+    paths:
+      - 'src/common/request-drain.mjs'
+      - 'templates/deploy/**'
+      - 'templates/standalone/**'
+      - 'src/studio/deployment.mjs'
+      - 'scripts/r33_*.mjs'
+      - 'tests/r33_*.test.mjs'
+      - '.github/workflows/r33-resilience-acceptance.yml'
+permissions:
+  contents: read
+concurrency:
+  group: r33-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  offline-resilience:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Check syntax and complete historical regression
+        run: npm run check && npm test
+      - name: Signed release, local concurrent writes and actual SIGKILL recovery
+        run: |
+          mkdir -p artifacts
+          npm run acceptance:r33 -- --out="${PWD}/artifacts/r33-acceptance.json"
+      - name: Upload synthetic-only evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r33-offline-acceptance
+          path: artifacts/r33-acceptance.json
+          if-no-files-found: warn
+          retention-days: 7
+  docker-synthetic:
+    needs: offline-resilience
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Verify isolated Docker runner
+        run: docker info && docker compose version
+      - name: Prepare synthetic-only image
+        run: docker pull node:22-bookworm-slim
+      - name: Test Docker volume migration and interruption recovery
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          npm run docker:e2e 2>&1 | tee artifacts/r33-volume-migration.log
+      - name: Test signed Docker upgrade, rollback and forward resume
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          npm run docker:e2e:r31 2>&1 | tee artifacts/r33-signed-upgrade.log
+      - name: Upload Docker test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r33-docker-logs
+          path: artifacts/r33-*.log
+          if-no-files-found: warn
+          retention-days: 7
