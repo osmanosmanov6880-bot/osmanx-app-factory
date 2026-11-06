@@ -6,7 +6,9 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createServer as createTcpListener } from 'node:net';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import {createServer as createHttpServer} from 'node:http';
+import {createR47ObjectReceiver} from '../src/migration/r47-receiver.mjs';
+import { mkdtemp, mkdir, rm, rename, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -33,6 +35,8 @@ const r42Secret=randomBytes(32).toString('hex');
 const r46CatalogKey=randomBytes(32).toString('hex');
 const r46OldKey=randomBytes(32).toString('hex');
 const r46NewKey=randomBytes(32).toString('hex');
+const r47Bearer=randomBytes(32).toString('hex');
+let r47Endpoint='';
 let r46NextKeyActive=false;
 function check(ok,message) {if(!ok)throw Error(message);}
 function guard(){
@@ -70,6 +74,12 @@ async function launchFactory(dataDir,bundle,keyPath,pgUser,pgPass){
       ...(r46NextKeyActive?{
         OX_R46_PREVIOUS_KEY_ID:'key_one',OX_R46_PREVIOUS_KEY_HEX:r46OldKey
       }:{})
+    }:{}),
+    ...(process.env.OX_R47_E2E==='YES'?{
+      OX_R47_OFFSITE:'YES',OX_R47_CONFIRM_SYNTHETIC:'YES',
+      OX_R47_ENDPOINT:r47Endpoint,OX_R47_REMOTE_TOKEN:r47Bearer,
+      OX_R47_LOOPBACK_TEST:'YES',OX_R47_INTERVAL_MINUTES:'60',
+      OX_R47_MAX_AGE_MINUTES:'180',OX_R47_SCHEDULE_PROJECT_IDS:projectA
     }:{})};
   const server=spawn(process.execPath,['server.mjs'],{cwd:new URL('../',import.meta.url),env,stdio:['ignore','pipe','pipe']});
   let tail='';let closed=false;
@@ -155,8 +165,13 @@ async function main(){
   // The driver is loaded only in explicitly enabled test/runtime contexts.
   const {Pool}=await import('pg');
   const dir=await mkdtemp(join(tmpdir(),'ox-r40-http-'));
-  let server,adminPool;
+  let server,adminPool,offsiteServer;
   try{
+    if(process.env.OX_R47_E2E==='YES'){
+      offsiteServer=createHttpServer(createR47ObjectReceiver({root:join(dir,'offsite-receiver'),token:r47Bearer}));
+      await new Promise(resolve=>offsiteServer.listen(0,'127.0.0.1',resolve));
+      r47Endpoint='http://127.0.0.1:'+offsiteServer.address().port+'/';
+    }
     const dataDir=join(dir,'data');const bundle=join(dir,'signed-export');
     await mkdir(join(dataDir,'projects'),{recursive:true,mode:0o700});
     const studio=studioDb(join(dataDir,'studio.sqlite'));
@@ -265,6 +280,54 @@ async function main(){
       const gone=await reqA(vault+'/verify/'+copies[0],'POST');
       requireStatus(gone,409,'R4.6 retired archives cannot be restored');
       vaultSurvivorId=copies[2];
+    }
+    if(process.env.OX_R47_E2E==='YES'){
+      const route='/api/studio/pg-preview/projects/'+projectA+'/offsite';
+      const before=await reqA(route+'/status');
+      requireStatus(before,200,'R4.7 offsite status before first sync');
+      check(before.data.healthy===false,'R4.7 no backup must never report healthy');checks++;
+      const published=await reqA(route+'/sync','POST');
+      requireStatus(published,200,'R4.7 encrypted remote sync');
+      check(published.data.result.published.uploadedArchives===2&&
+        published.data.result.restoreProof.restoredIntegrityVerified===true,
+        'R4.7 offsite snapshot did not verify');checks++;
+      // The signed manifest/keys and remote ciphertext suffice even after
+      // complete loss of the original local archive directory.
+      const vaultRoot=join(dataDir,'.r46-encrypted-vault',projectA);
+      const disconnected=join(dir,'temporarily-disconnected-vault');
+      await rename(vaultRoot,disconnected);
+      try{
+        const independent=await reqA(route+'/restore-check','POST');
+        requireStatus(independent,200,'R4.7 independent remote restore without local vault');
+        check(independent.data.result.financialRecords>=1&&
+          independent.data.result.restoredIntegrityVerified===true,
+          'R4.7 disaster restore cannot recover signed financial records');checks++;
+      }finally{await rename(disconnected,vaultRoot);}
+      const scheduled=await reqA(route+'/tick','POST');
+      requireStatus(scheduled,200,'R4.7 scheduled backup creation and remote replication');
+      check(scheduled.data.result.ran===true&&
+        scheduled.data.result.proof.remoteReadbackVerified===true,
+        'R4.7 scheduled tick not committed');checks++;
+      const skipped=await reqA(route+'/tick','POST');
+      requireStatus(skipped,200,'R4.7 scheduled interval prevents duplicate backup');
+      check(skipped.data.result.ran===false,'R4.7 duplicate tick was not suppressed');checks++;
+      const health=await reqA(route+'/status');
+      requireStatus(health,200,'R4.7 offsite and schedule status');
+      check(health.data.healthy===true&&health.data.remoteHealth.remoteMatchesLocal===true,
+        'R4.7 status failed despite authenticated remote copy');checks++;
+      requireStatus(await reqB(route+'/sync','POST'),404,'R4.7 cross-tenant remote sync forbidden');
+      requireStatus(await reqA(route+'/sync','POST',undefined,'bad-csrf'),403,
+        'R4.7 remote sync CSRF denied');
+      requireStatus(await reqA(route+'/sync','GET'),405,'R4.7 GET cannot trigger uploads');
+      const tenantToken=(await import('../src/migration/r47-offsite.mjs')).r47TenantToken(
+        Buffer.from(r46CatalogKey,'hex'),projectA);
+      const headPath=join(dir,'offsite-receiver',tenantToken,'head.json');
+      const goodHead=await readFile(headPath);
+      await writeFile(headPath,Buffer.from('{"forged":true}'));
+      try{
+        requireStatus(await reqA(route+'/restore-check','POST'),409,
+          'R4.7 remote head tampering denied');
+      }finally{await writeFile(headPath,goodHead);}
     }
     const firstA=await reqA(pathA);requireStatus(firstA,200,'Owner A read');
     check(firstA.data.clients.length===1 && firstA.data.clients[0].fullName==='Original A','Owner A sees only own imported rows');checks++;
@@ -401,6 +464,25 @@ async function main(){
       requireStatus(retention,200,'R4.6 post-rotation retention');
       check(retention.data.result.retained===2,'R4.6 retention failed after rotation');checks++;
     }
+    if(process.env.OX_R47_E2E==='YES'){
+      const offsite='/api/studio/pg-preview/projects/'+projectA+'/offsite';
+      const stale=await afterRestart(offsite+'/status');
+      requireStatus(stale,200,'R4.7 detects unsynced rotated archive after restart');
+      check(stale.data.remoteHealth.remoteMatchesLocal===false,
+        'R4.7 remote freshness checker missed local key rotation');checks++;
+      const pushed=await afterRestart(offsite+'/sync','POST');
+      requireStatus(pushed,200,'R4.7 recovers remote replication after process restart');
+      const restored=await afterRestart(offsite+'/restore-check','POST');
+      requireStatus(restored,200,'R4.7 independent restore of rotated encrypted copy');
+      check(restored.data.result.restoredIntegrityVerified===true&&
+        restored.data.result.financialRecords>=1&&
+        restored.data.result.productionCutoverAllowed===false,
+        'R4.7 rotated archive could not be restored safely');checks++;
+      const monitor=await afterRestart(offsite+'/status');
+      requireStatus(monitor,200,'R4.7 healthy remote monitor after resync');
+      check(monitor.data.healthy===true,
+        'R4.7 backup schedule checkpoint did not survive process restart');checks++;
+    }
     const afterTasks=await afterRestart(tasksA),afterVisits=await afterRestart(visitsA);
     requireStatus(afterTasks,200,'Task persists after server restart');
     requireStatus(afterVisits,200,'Visits persist after server restart');
@@ -479,11 +561,13 @@ async function main(){
       r44CriticalParityVerified:process.env.OX_R44_E2E==='YES',
       r45EncryptedRestoreVerified:process.env.OX_R45_E2E==='YES',
       r46RetainedEncryptedVaultVerified:process.env.OX_R46_E2E==='YES',
+      r47OffsiteIndependentRecoveryVerified:process.env.OX_R47_E2E==='YES',
       privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));
   }finally{
     if(server)await stopFactory(server);
+    if(offsiteServer)await new Promise(resolve=>offsiteServer.close(resolve));
     if(adminPool)await adminPool.end();
     await rm(dir,{recursive:true,force:true});
   }
