@@ -1,0 +1,88 @@
+name: R4.3 synthetic PostgreSQL 15 16 shadow replay acceptance
+on:
+  push:
+    branches: ['feat/r43-safe-shadow-replay', main]
+    paths:
+      - 'src/migration/r43-*'
+      - 'server.mjs'
+      - 'tests/r43_shadow_replay.test.mjs'
+      - 'scripts/r41_pg_workflows_e2e.mjs'
+      - 'package.json'
+      - '.github/workflows/r43-pg-shadow-replay.yml'
+  pull_request:
+    paths:
+      - 'src/migration/**'
+      - 'server.mjs'
+      - 'tests/r43_shadow_replay.test.mjs'
+      - 'scripts/r41_pg_workflows_e2e.mjs'
+      - 'package.json'
+      - '.github/workflows/r43-pg-shadow-replay.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: r43-shadow-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  shadow-replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15', '16']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r43-synthetic-test-only
+          POSTGRES_DB: ox_test_factory_r40
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_test_factory_r40"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r43-synthetic-test-only
+      PGDATABASE: ox_test_factory_r40
+      PGSSLMODE: disable
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R43_E2E: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Pinned PG driver
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: PostgreSQL client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE"
+      - name: Full local R4.3 and predecessor regression
+        run: |
+          npm run test:r43
+          npm run test:r42
+          npm run test:r41
+          npm run test:r40
+          node --check server.mjs
+          node --check scripts/r41_pg_workflows_e2e.mjs
+      - name: Signed source + shadow replay + crash-resistant checkpoint + unauthorized-change denial
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          node scripts/r41_pg_workflows_e2e.mjs --confirm-synthetic | tee artifacts/r43-pg-${{ matrix.postgres }}.json
+      - name: Retain synthetic-only receipts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r43-pg-${{ matrix.postgres }}-synthetic
+          path: artifacts/r43-pg-${{ matrix.postgres }}.json
+          if-no-files-found: ignore
+          retention-days: 7
