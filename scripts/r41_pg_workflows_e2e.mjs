@@ -644,10 +644,12 @@ async function main(){
       const denied=await fetch(uri.origin+pathname+'?'+query,{method:'DELETE',
         headers:signed,signal:AbortSignal.timeout(10000)});
       const deletionBody=await denied.text();
+      const s3ErrorCode=(deletionBody.match(/<Code>([A-Za-z0-9_]+)<\/Code>/)||[])[1]||'none';
       check([403,409].includes(denied.status)&&
         /AccessDenied|ObjectLocked|WORM|retention/i.test(deletionBody)&&
         !/SignatureDoesNotMatch|InvalidAccessKeyId|AuthorizationHeaderMalformed/i.test(deletionBody),
-        'R4.9 exact-version delete denial was not a WORM policy decision');checks++;
+        'R4.9 exact-version delete denied incorrectly (HTTP '+denied.status+
+          ', S3 error code '+s3ErrorCode+')');checks++;
       const stillLocked=await remote.get('archives/'+id+'.oxb');
       check(stillLocked.length>0,'R4.9 protected archive disappeared after denied delete');checks++;
       stillLocked.fill(0);
