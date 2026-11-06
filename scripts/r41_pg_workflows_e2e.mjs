@@ -55,7 +55,8 @@ async function launchFactory(dataDir,bundle,keyPath,pgUser,pgPass){
     PGUSER:pgUser,PGPASSWORD:pgPass, OX_R40_PG_PREVIEW:'YES',
     OX_R40_PG_BUNDLE:bundle,OX_R40_PG_TRUST_KEY:keyPath,OX_R40_EPHEMERAL:'YES',
      OX_R42_PG_RECONCILIATION:'YES',OX_R42_JOURNAL_HMAC_KEY:r42Secret,
-    ...(process.env.OX_R43_E2E==='YES'?{OX_R43_SHADOW_REPLAY:'YES',OX_R43_CONFIRM_SYNTHETIC:'YES'}:{})};
+    ...(process.env.OX_R43_E2E==='YES'?{OX_R43_SHADOW_REPLAY:'YES',OX_R43_CONFIRM_SYNTHETIC:'YES'}:{}),
+    ...(process.env.OX_R44_E2E==='YES'?{OX_R44_CRITICAL_PARITY:'YES',OX_R44_CONFIRM_SYNTHETIC:'YES'}:{})};
   const server=spawn(process.execPath,['server.mjs'],{cwd:new URL('../',import.meta.url),env,stdio:['ignore','pipe','pipe']});
   let tail='';let closed=false;
   server.stderr.on('data',b=>{tail=(tail+b.toString('utf8')).slice(-600);});
@@ -305,6 +306,15 @@ async function main(){
       const shadowPath='/api/studio/pg-preview/projects/'+projectA+'/shadow-replay';
       const first=await afterRestart(shadowPath+'/check','POST');
       requireStatus(first,200,'R4.3 PG-to-ephemeral shadow replay');
+      if(process.env.OX_R44_E2E==='YES'){
+        check(first.data.receipt.criticalParity?.ok===true&&
+          first.data.receipt.criticalParity.financial?.records>=1&&
+          first.data.receipt.criticalParity.automations?.rules>=1&&
+          first.data.receipt.criticalParity.automations?.runs>=1&&
+          first.data.receipt.criticalParity.custom?.entities>=1&&
+          first.data.receipt.criticalParity.paymentWritesPermitted===false,
+          'R4.4 critical nonempty financial/workflow/custom-entity gate failed');checks++;
+      }
       check(first.data.receipt.shadowAligned===true&&first.data.receipt.primarySqliteModified===false
         &&first.data.receipt.firstPass.inserted>0&&first.data.receipt.idempotentRetryVerified===true
         &&first.data.receipt.productionCutoverAllowed===false,'R4.3 signed shadow replay validation failed');checks++;
@@ -342,6 +352,7 @@ async function main(){
       postgresRuntimeEnabled:true,sqlitePrimaryRuntime:true,productionCutoverApproved:false,
       initialDriftZero:true,subsequentDriftDetected:true,ownerReconciliationProtected:true,
       r43ShadowReplayVerified:process.env.OX_R43_E2E==='YES',
+      r44CriticalParityVerified:process.env.OX_R44_E2E==='YES',
       privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));
