@@ -17,6 +17,7 @@ import {handleR43Request,validateR43Options,R43_PATH} from './src/migration/r43-
 import {handleR45Request,validateR45Options,R45_PATH} from './src/migration/r45-http.mjs';
 import {handleR46Request,validateR46Options,R46_PATH} from './src/migration/r46-http.mjs';
 import {handleR47Request,validateR47Options,R47_PATH,startR47AutomaticBackups} from './src/migration/r47-http.mjs';
+import {handleR48Request,validateR48Options,R48_PATH,startR48ProtectionMonitoring} from './src/migration/r48-http.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url));
 const data=resolve(process.env.DATA_DIR || resolve(root,'data'));
@@ -25,13 +26,14 @@ let db;
 try{db=studioDb(resolve(data,'studio.sqlite'));}catch(e){releaseLock();throw e;}
 const crmCache=new Map();
 // Strictly opt-in PostgreSQL staging API. Any failed setup aborts server startup.
-let pgPreview,r42Options,r43Options,r45Options,r46Options,r47Options;
+let pgPreview,r42Options,r43Options,r45Options,r46Options,r47Options,r48Options;
 try {
   r42Options=validateR42Options(process.env);
   r43Options=validateR43Options(process.env);
   r45Options=validateR45Options(process.env);
   r46Options=validateR46Options(process.env);
   r47Options=validateR47Options(process.env);
+  r48Options=validateR48Options(process.env);
   pgPreview=await createR40Runtime({studioDb:db});
 } catch(error) {db.close();releaseLock();throw error;}
 const port=Number(process.env.PORT||4173);
@@ -42,6 +44,8 @@ const server=createServer(async(req,res)=>{
     securityHeaders(res);
     const url=new URL(req.url,'http://localhost');
     if(url.pathname==='/api/health') return json(res,{ok:true,service:'osmanx-app-factory',version:'1.3.0'});
+    if(R48_PATH.test(url.pathname))
+      return await handleR48Request(req,res,{studioDb:db,runtime:pgPreview,dataDir:data,options:r48Options});
     if(R47_PATH.test(url.pathname))
       return await handleR47Request(req,res,{studioDb:db,runtime:pgPreview,dataDir:data,options:r47Options});
     if(R46_PATH.test(url.pathname))
@@ -84,6 +88,7 @@ const server=createServer(async(req,res)=>{
   } catch(err) { respondError(res,err); }
 });
 const r47Scheduler=startR47AutomaticBackups({studioDb:db,runtime:pgPreview,dataDir:data,options:r47Options});
+const r48Monitoring=startR48ProtectionMonitoring({studioDb:db,runtime:pgPreview,dataDir:data,options:r48Options});
 server.listen(port,host,()=>console.log(`OSMANX APP FACTORY http://${host}:${port}`));
-function close() {r47Scheduler?.stop();server.close(async()=>{try{await pgPreview?.close();}finally{for(const crm of crmCache.values())crm.close();db.close();releaseLock();process.exit(0);}});}
+function close() {r48Monitoring?.stop();r47Scheduler?.stop();server.close(async()=>{try{await pgPreview?.close();}finally{for(const crm of crmCache.values())crm.close();db.close();releaseLock();process.exit(0);}});}
 process.on('SIGINT',close);process.on('SIGTERM',close);

@@ -194,3 +194,14 @@ export async function inspectR47OffsiteStatus(input){
       productionCutoverAllowed:false};
   }finally{local.bytes.fill(0);}
 }
+
+
+// R4.8 independent witness reads fully authenticated R4.7 remote head/catalog.
+// This does not trust a bare remote pointer or any caller-provided checksum.
+export async function readR47SignedRemoteHead({vault,remote}={}){
+  const {pointer,parsed}=await readRemoteCatalog(vault,remote);
+  guard(parsed.entries>=1,'remote witness requires signed catalog entries');
+  return {catalogSha256:pointer.catalogSha256,manifestSha256:vault.manifestSha256,
+    entries:parsed.entries,committedAt:pointer.committedAt,
+    verified:true};
+}
