@@ -45,6 +45,7 @@ const r48Bearer=randomBytes(32).toString('hex');
 let r48WitnessEndpoint='',r48AlertEndpoint='';
 const r49WitnessKey=randomBytes(32).toString('hex');
 const r49WitnessToken=randomBytes(32).toString('hex');
+const r50EvidenceKey=randomBytes(32).toString('hex');
 let r49WitnessEndpoint='';
 let r46NextKeyActive=false;
 function check(ok,message) {if(!ok)throw Error(message);}
@@ -687,6 +688,109 @@ async function main(){
           recovered.prepare('SELECT count(*) AS n FROM clients').get().n===1,
           'R4.9 isolated recovery altered or lost signed CRM financial data');checks++;
       }finally{recovered.close();}
+      if(process.env.OX_R50_E2E==='YES'){
+        const {runR50RecoveryExercise}=await import('../src/migration/r50-drill.mjs');
+        const {readR50Evidence}=await import('../src/migration/r50-evidence.mjs');
+        const {verifyR50IndependentReviews,canonicalR50ApprovalMessage}=
+          await import('../src/migration/r50-approvals.mjs');
+        const {generateKeyPairSync,sign}=await import('node:crypto');
+        const evidence={directory:join(dir,'r50-signed-evidence'),tenantToken:token,
+          key:Buffer.from(r50EvidenceKey,'hex')};
+        const topology={storageEndpoint:cfg.endpoint,witnessEndpoint:r49WitnessEndpoint,
+          alertEndpoint:r48AlertEndpoint,allowSyntheticLoopback:true,
+          resolver:async()=>[{address:'127.0.0.1',family:4}]};
+        const drill=await runR50RecoveryExercise({...offlineArgs,...topology,evidence,
+          maxRtoMs:120000,maxBackupAgeMs:10800000});
+        check(drill.syntheticDrillAccepted===true&&
+          drill.signedRecoveryVerified===true&&
+          drill.productionCutoverAllowed===false&&
+          drill.physicalFailureDomainsIndependentlyVerified===false,
+          'R5.0 witnessed operational drill did not pass with truthful synthetic scope');checks++;
+        const audit=await readR50Evidence(evidence);
+        check(audit.hmacVerified===true&&audit.recordCount===1&&
+          audit.headSha256===drill.evidenceHeadSha256&&
+          audit.externallyAnchored===false,
+          'R5.0 HMAC evidence file failed immediate readback');checks++;
+        const challenge={
+          format:'osmanx-r50-staging-review-v1',tenantToken:token,
+          catalogSha256:drill.archivedCatalogSha256,evidenceHeadSha256:audit.headSha256,
+          testedCodeSha256:'e'.repeat(64),
+          issuedAt:Date.now()-1000,expiresAt:Date.now()+60000,
+          purpose:'EXTERNAL_SYNTHETIC_DR_REHEARSAL'
+        };
+        const message=canonicalR50ApprovalMessage(challenge);
+        const trustedPublicKeys={},approvals=[];
+        for(const role of ['security','operations','dataOwner']){
+          const pair=generateKeyPairSync('ed25519');
+          trustedPublicKeys[role]=pair.publicKey;
+          approvals.push({role,signature:sign(null,message,pair.privateKey).toString('base64')});
+        }
+        const approved=verifyR50IndependentReviews({
+          challenge,approvals,trustedPublicKeys});
+        check(approved.rolesVerified.length===3&&
+          approved.approvedForSyntheticExternalDrill===true&&
+          approved.independentlyVerifiedHumanIdentities===false&&
+          approved.productionCutoverAllowed===false,
+          'R5.0 staging review incorrectly promoted signed synthetic fixture');checks++;
+        let badReviewRejected=false;
+        try{verifyR50IndependentReviews({challenge:{...challenge,
+          evidenceHeadSha256:'f'.repeat(64)},approvals,trustedPublicKeys});}
+        catch{badReviewRejected=true;}
+        check(badReviewRejected,'R5.0 accepted signatures for another evidence digest');checks++;
+        const stale=await runR50RecoveryExercise({...offlineArgs,...topology,evidence,
+          now:Date.now()+3600000,maxRtoMs:120000,maxBackupAgeMs:60000});
+        check(stale.syntheticDrillAccepted===false&&stale.meetsBackupAge===false&&
+          (await readR50Evidence(evidence)).lastVerdict==='FAIL',
+          'R5.0 stale recovery incorrectly accepted or not recorded');checks++;
+        // Detached CLI process: only the S3 endpoint, independent witness,
+        // signed migration bundle and external keys are supplied. The source
+        // local vault path is *never* available to this process.
+        const cleanDestination=join(dir,'r50-clean-host');
+        const env={...process.env,OX_R40_EPHEMERAL:'YES',
+          OX_R49_OFFLINE_DR_SYNTHETIC:'YES',OX_R49_LOOPBACK_TEST:'YES',
+          OX_R49_PROJECT_ID:projectA,OX_R49_SIGNED_MANIFEST_SHA256:verified.manifestSha256,
+          OX_R49_SIGNED_BUNDLE_DIR:bundle,OX_R49_TRUSTED_PUBLIC_KEY_FILE:keys.publicKey,
+          OX_R49_RECOVERY_DIR:cleanDestination,OX_R49_CATALOG_HMAC_KEY_HEX:r46CatalogKey,
+          OX_R49_BACKUP_KEY_ID:'key_two',OX_R49_BACKUP_KEY_HEX:r46NewKey,
+          OX_R49_OLD_BACKUP_KEY_ID:'key_one',OX_R49_OLD_BACKUP_KEY_HEX:r46OldKey,
+          OX_R49_S3_ENDPOINT:cfg.endpoint,OX_R49_S3_BUCKET:cfg.bucket,
+          OX_R49_S3_REGION:cfg.region,OX_R49_S3_ACCESS_KEY:cfg.accessKey,
+          OX_R49_S3_SECRET_KEY:cfg.secretKey,
+          OX_R49_WITNESS_ENDPOINT:r49WitnessEndpoint,
+          OX_R49_WITNESS_TOKEN:r49WitnessToken,OX_R49_WITNESS_KEY_HEX:r49WitnessKey};
+        const child=spawn(process.execPath,['ops/r49/recover.mjs'],{
+          cwd:new URL('../',import.meta.url),env,stdio:['ignore','pipe','pipe']});
+        let out='',childError='';
+        child.stdout.on('data',b=>{out=(out+b.toString('utf8')).slice(-12000);});
+        child.stderr.on('data',b=>{childError=(childError+b.toString('utf8')).slice(-700);});
+        const exit=await Promise.race([
+          new Promise(resolve=>child.once('close',(code)=>resolve({code}))),
+          sleep(25000).then(()=>({timeout:true}))
+        ]);
+        if(exit.timeout){
+          child.kill('SIGKILL');
+          await new Promise(resolve=>child.once('close',resolve));
+        }
+        check(!exit.timeout&&exit.code===0,
+          'R5.0 independent recovery process did not complete successfully');
+        let detached;try{detached=JSON.parse(out);}catch{throw Error('R5.0 detached CLI did not emit JSON');}
+        check(detached.catalogWitnessVerified===true&&
+          detached.objectLockVerified===true&&
+          detached.financialRecords>=1&&detached.productionCutoverAllowed===false&&
+          detached.outputFile.startsWith(cleanDestination+'/'),
+          'R5.0 isolated recovery process financial or file proof rejected');checks++;
+        const detachedDb=crmDb(detached.outputFile);
+        try{
+          check(detachedDb.prepare('SELECT amount_minor FROM payments').get().amount_minor===12500,
+            'R5.0 detached recovery changed signed financial amount');checks++;
+        }finally{detachedDb.close();}
+        // Prove a restart or detached restore did not affect the primary.
+        const unchangedPrimary=crmDb(join(dataDir,'projects',projectA+'.sqlite'));
+        try{
+          check(unchangedPrimary.prepare('SELECT amount_minor FROM payments').get().amount_minor===12500,
+            'R5.0 detached DR modified the primary SQLite unexpectedly');checks++;
+        }finally{unchangedPrimary.close();}
+      }
     }
     const afterTasks=await afterRestart(tasksA),afterVisits=await afterRestart(visitsA);
     requireStatus(afterTasks,200,'Task persists after server restart');
@@ -769,6 +873,7 @@ async function main(){
       r47OffsiteIndependentRecoveryVerified:process.env.OX_R47_E2E==='YES',
       r48IndependentWitnessAndMeasuredRecoveryVerified:process.env.OX_R48_E2E==='YES',
       r49LiveS3ObjectLockAndOfflineRestoreVerified:process.env.OX_R49_E2E==='YES',
+      r50SyntheticOperationalGateAndDetachedRecoveryVerified:process.env.OX_R50_E2E==='YES',
       privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));
