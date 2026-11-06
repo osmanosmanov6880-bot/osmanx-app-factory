@@ -407,6 +407,9 @@ async function main(){
         'R4.8 measured remote restore proof not accepted');checks++;
       const pruned=await reqA('/api/studio/pg-preview/projects/'+projectA+'/backup-vault/prune','POST');
       requireStatus(pruned,200,'R4.8 restore original retention count before restart');
+      // Retention now advances the oldest surviving R4.6 fixture: use
+      // the newly verified key_one archive when rehearsing restart/rotation.
+      vaultSurvivorId=extra.data.result.archive.id;
       const prunedSync=await reqA(route+'/sync','POST');
       requireStatus(prunedSync,200,'R4.8 witness advances to retained archive set');
       requireStatus(await reqB(route+'/sync','POST'),404,'R4.8 cross-tenant witness denied');
