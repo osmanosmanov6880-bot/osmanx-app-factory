@@ -258,3 +258,19 @@ export async function pruneR46Vault(input,{keep=3}={}){
       productionCutoverAllowed:false};
   });
 }
+
+
+// R4.7 read-only catalog parser: shared by the local vault and independent
+// remote restore. Never trusts the remote manifest without this HMAC check.
+export function verifyR46CatalogBytes(bytes,input){
+  const info=params(input);
+  guard(Buffer.isBuffer(bytes)&&bytes.length<=MAX_JOURNAL,'bounded catalog bytes required');
+  const state=loadRecords(bytes.toString('utf8'),info);
+  return {
+    format:FORMAT,entries:state.events.length,
+    catalogHeadSha256:state.previous,
+    active:[...state.active.values()].sort((a,b)=>a.sequence-b.sequence),
+    retiredCount:state.retired.size,
+    authenticated:true
+  };
+}

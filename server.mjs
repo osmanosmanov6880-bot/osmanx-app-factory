@@ -16,6 +16,7 @@ import {handleR42Request,validateR42Options,R42_PATH} from './src/migration/r42-
 import {handleR43Request,validateR43Options,R43_PATH} from './src/migration/r43-pg-http.mjs';
 import {handleR45Request,validateR45Options,R45_PATH} from './src/migration/r45-http.mjs';
 import {handleR46Request,validateR46Options,R46_PATH} from './src/migration/r46-http.mjs';
+import {handleR47Request,validateR47Options,R47_PATH,startR47AutomaticBackups} from './src/migration/r47-http.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url));
 const data=resolve(process.env.DATA_DIR || resolve(root,'data'));
@@ -24,12 +25,13 @@ let db;
 try{db=studioDb(resolve(data,'studio.sqlite'));}catch(e){releaseLock();throw e;}
 const crmCache=new Map();
 // Strictly opt-in PostgreSQL staging API. Any failed setup aborts server startup.
-let pgPreview,r42Options,r43Options,r45Options,r46Options;
+let pgPreview,r42Options,r43Options,r45Options,r46Options,r47Options;
 try {
   r42Options=validateR42Options(process.env);
   r43Options=validateR43Options(process.env);
   r45Options=validateR45Options(process.env);
   r46Options=validateR46Options(process.env);
+  r47Options=validateR47Options(process.env);
   pgPreview=await createR40Runtime({studioDb:db});
 } catch(error) {db.close();releaseLock();throw error;}
 const port=Number(process.env.PORT||4173);
@@ -40,6 +42,8 @@ const server=createServer(async(req,res)=>{
     securityHeaders(res);
     const url=new URL(req.url,'http://localhost');
     if(url.pathname==='/api/health') return json(res,{ok:true,service:'osmanx-app-factory',version:'1.3.0'});
+    if(R47_PATH.test(url.pathname))
+      return await handleR47Request(req,res,{studioDb:db,runtime:pgPreview,dataDir:data,options:r47Options});
     if(R46_PATH.test(url.pathname))
       return await handleR46Request(req,res,{studioDb:db,runtime:pgPreview,dataDir:data,options:r46Options});
     if(R45_PATH.test(url.pathname))
@@ -79,6 +83,7 @@ const server=createServer(async(req,res)=>{
     await handleStudioRequest(req,res,{db,root});
   } catch(err) { respondError(res,err); }
 });
+const r47Scheduler=startR47AutomaticBackups({studioDb:db,runtime:pgPreview,dataDir:data,options:r47Options});
 server.listen(port,host,()=>console.log(`OSMANX APP FACTORY http://${host}:${port}`));
-function close() {server.close(async()=>{try{await pgPreview?.close();}finally{for(const crm of crmCache.values())crm.close();db.close();releaseLock();process.exit(0);}});}
+function close() {r47Scheduler?.stop();server.close(async()=>{try{await pgPreview?.close();}finally{for(const crm of crmCache.values())crm.close();db.close();releaseLock();process.exit(0);}});}
 process.on('SIGINT',close);process.on('SIGTERM',close);
