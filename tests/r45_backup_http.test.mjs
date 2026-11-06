@@ -8,7 +8,7 @@ import {tmpdir} from 'node:os';
 import {studioDb} from '../src/studio/db.mjs';
 import {issueSession} from '../src/common/security.mjs';
 import {respondError} from '../src/common/http.mjs';
-import {handleR45Request} from '../src/migration/r45-pg-http.mjs';
+import {handleR45Request} from '../src/migration/r45-http.mjs';
 const A='11111111-1111-4111-8111-111111111111';
 const B='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const P='22222222-2222-4222-8222-222222222222';
