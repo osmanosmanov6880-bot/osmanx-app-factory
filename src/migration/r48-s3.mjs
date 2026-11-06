@@ -65,7 +65,7 @@ export function createR48S3Transport({endpoint,bucket,region,accessKey,secretKey
         const status=res.statusCode||0;
         const parts=[];let size=0;
         res.on('data',b=>{size+=b.length;if(size>MAX){request.destroy(Error('R4.8 S3 denied: oversize response'));return;}parts.push(b);});
-        res.on('end',()=>resolve({status,body:Buffer.concat(parts)}));
+        res.on('end',()=>resolve({status,body:Buffer.concat(parts),responseHeaders:res.headers}));
         res.on('error',reject);
       });
       request.on('timeout',()=>request.destroy(Error('R4.8 S3 denied: timeout')));
@@ -103,6 +103,30 @@ export function createR48S3Transport({endpoint,bucket,region,accessKey,secretKey
     return {versioningEnabled:true,objectLockEnabled:true,
       providerChecksVerified:true,productionCutoverAllowed:false};
   }
-  return Object.freeze({put,get,assertBucketControls,transport:'s3-sigv4-v1',
+  // R4.9 checks real provider responses for actual WORM retention on
+  // new object versions. Merely enabling Object Lock is insufficient.
+  async function inspectR49Worm(key,{minRemainingMinutes=5}={}){
+    deny(Number.isSafeInteger(minRemainingMinutes)&&minRemainingMinutes>=1&&
+      minRemainingMinutes<=10080,'invalid object retention minimum');
+    await assertBucketControls();
+    const config=await request('GET','/'+enc(bucket),{query:'object-lock='});
+    const xml=config.body.toString('utf8');
+    deny(config.status===200&&
+      /<DefaultRetention>\s*<Mode>\s*COMPLIANCE\s*<\/Mode>[\s\S]*?<Days>\s*\d+\s*<\/Days>[\s\S]*?<\/DefaultRetention>/.test(xml),
+      'default COMPLIANCE retention in days is required');
+    const item=await request('HEAD',location(key));
+    deny(item.status===200,'S3 HEAD encrypted object status '+item.status);
+    const hdr=item.responseHeaders||{};
+    const until=Date.parse(String(hdr['x-amz-object-lock-retain-until-date']||''));
+    deny(String(hdr['x-amz-object-lock-mode']||'')==='COMPLIANCE'&&
+      Number.isFinite(until)&&until-Date.now()>=minRemainingMinutes*60000,
+      'S3 object version lacks future COMPLIANCE retention');
+    deny(typeof hdr['x-amz-version-id']==='string'&&hdr['x-amz-version-id'].length>0&&
+      hdr['x-amz-version-id']!=='null','S3 encrypted object lacks a version ID');
+    return {objectLockVerified:true,retentionMode:'COMPLIANCE',
+      retentionUntil:new Date(until).toISOString(),versioned:true,
+      productionCutoverAllowed:false};
+  }
+  return Object.freeze({put,get,assertBucketControls,inspectR49Worm,transport:'s3-sigv4-v1',
     syntheticLoopbackOnly:loopback});
 }
