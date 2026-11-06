@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes} from 'node:crypto';
+import {r47TenantToken} from '../src/migration/r47-offsite.mjs';
 import {inspectR51Separation,runR51OperationalReadiness}
   from '../src/migration/r51-readiness.mjs';
 const e={
@@ -38,7 +39,7 @@ test('R5.1 synthetic four-port loopback is labelled same-host, not external',asy
   assert.equal(r.productionCutoverAllowed,false);
 });
 test('R5.1 trust domains must never reuse the same encryption/evidence/alert key',async()=>{
-  const key=randomBytes(32),tenantToken='a'.repeat(24);
+  const key=randomBytes(32),tenantToken=r47TenantToken(key,'11111111-1111-4111-8111-111111111111');
   const vault={projectId:'11111111-1111-4111-8111-111111111111',catalogKey:key};
   const result=runR51OperationalReadiness({vault,
     evidence:{key,tenantToken},remote:{},witness:{},
