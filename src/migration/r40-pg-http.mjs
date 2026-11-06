@@ -115,7 +115,7 @@ async function insertClient(scope, input) {
     RETURNING id, full_name, phone, email, source, notes, created_at, updated_at`,
     [id, data.fullName, data.phone, data.email, data.source, data.notes, now, now]);
   const client=mapClient(result.rows[0]);
-  if(auditEnabled())await writePgPreviewAudit(scope,{action:'create',entity:'clients',entityId:client.id});
+  if(auditEnabled())await writePgPreviewAudit(scope,{action:'create',entity:'clients',entityId:client.id,afterImage:result.rows[0]});
   return client;
 }
 
@@ -182,7 +182,7 @@ export async function handleR40PreviewRequest(req, res, {studioDb, runtime}) {
       const result = await scope.query(`UPDATE clients SET ${assignments.join(', ')}, updated_at=$${columns.length+1}
         WHERE id=$${columns.length+2} AND archived_at IS NULL
         RETURNING id, full_name, phone, email, source, notes, created_at, updated_at`, args);
-      if(result.rows[0]&&auditEnabled())await writePgPreviewAudit(scope,{action:'update',entity:'clients',entityId:target});
+      if(result.rows[0]&&auditEnabled())await writePgPreviewAudit(scope,{action:'update',entity:'clients',entityId:target,afterImage:result.rows[0]});
       return result.rows[0] ? mapClient(result.rows[0]) : null;
     });
     if (!client) bad(404, 'Клиент не найден');

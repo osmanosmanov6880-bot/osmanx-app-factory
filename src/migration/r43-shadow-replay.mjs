@@ -8,6 +8,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {quoteIdent} from './pg-kit.mjs';
 import {verifyTrustedMigration} from './pg-trust.mjs';
+import {r43AfterImageHmac} from './r42-pg-audit.mjs';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MUTABLE=new Set(['clients','tasks','visits']);
@@ -97,9 +98,9 @@ function inventory(db,manifestNames){
   const expected=[...manifestNames].sort();
   ensure(JSON.stringify(actual)===JSON.stringify(expected),'SQLite inventory differs from signed bundle');
 }
-function validateAudit(events,original){
+function validateAudit(events,original,secret){
   const base=mapRows(original,{name:'audit_log',columns:[{name:'id',type:'TEXT'}],primary:['id']});
-  const coverage=new Set();
+  const signatures=new Set(),creations=new Set();
   for(const entry of events){
     if(base.has(JSON.stringify([entry.id])))continue;
     ensure(UUID.test(entry.id)&&UUID.test(entry.entity_id||''),'new audit entry IDs invalid');
@@ -107,13 +108,15 @@ function validateAudit(events,original){
       'untrusted audit action');
     let metadata;
     try{metadata=JSON.parse(entry.metadata_json);}catch{throw Error('R4.3 shadow replay denied: audit metadata invalid');}
-    ensure(metadata?.surface==='postgresql-preview'&&['employee','studio-owner'].includes(metadata.actorKind),
-      'audit origin not verified');
-    coverage.add(entry.entity+':'+entry.entity_id+':'+entry.action);
+    ensure(metadata?.surface==='postgresql-preview'&&['employee','studio-owner'].includes(metadata.actorKind)
+      &&metadata.auditVersion==='r43-after-image-v1'&&/^[a-f0-9]{64}$/.test(metadata.afterImageHmac||''),
+      'audit origin or cryptographic after-image not verified');
+    signatures.add(entry.entity+':'+entry.entity_id+':'+entry.action+':'+metadata.afterImageHmac);
+    if(entry.action==='pg-preview.create')creations.add(entry.entity+':'+entry.entity_id);
   }
-  return coverage;
+  return {signatures,creations,size:signatures.size};
 }
-function preparePlan(db,captures){
+function preparePlan(db,captures,secret){
   const byName=new Map();
   for(const c of captures){
     const table=checkedTable(c.table);
@@ -122,7 +125,7 @@ function preparePlan(db,captures){
   }
   ensure(byName.has('audit_log'),'PostgreSQL mutation audit required');
   const origAudit=sqlRows(db,byName.get('audit_log').table,10000);
-  const coverage=validateAudit(byName.get('audit_log').postgresRows,origAudit);
+  const coverage=validateAudit(byName.get('audit_log').postgresRows,origAudit,secret);
   const plan=[],counts=[];
   for(const c of captures){
     const table=c.table,name=table.name;
@@ -141,11 +144,18 @@ function preparePlan(db,captures){
       continue;
     }
     for(const row of delta.added){
-      ensure(coverage.has(name+':'+row.id+':pg-preview.create'),'new '+name+' record has no matching audit event');
+      const expected=r43AfterImageHmac(secret,name,row);
+      const signature=name+':'+row.id+':';
+      ensure(coverage.creations.has(signature.slice(0,-1))&&
+        (coverage.signatures.has(signature+'pg-preview.create:'+expected)||
+         coverage.signatures.has(signature+'pg-preview.update:'+expected)),
+        'new '+name+' record has no matching signed after-image');
       plan.push({name,kind:'insert',table,row});
     }
     for(const row of delta.changed){
-      ensure(coverage.has(name+':'+row.id+':pg-preview.update'),'updated '+name+' record has no matching audit event');
+      const expected=r43AfterImageHmac(secret,name,row);
+      ensure(coverage.signatures.has(name+':'+row.id+':pg-preview.update:'+expected),
+        'updated '+name+' record has no matching signed after-image');
       plan.push({name,kind:'update',table,row});
     }
     counts.push({table:name,insert:delta.added.length,update:delta.changed.length});
@@ -181,11 +191,12 @@ function executeChanges(db,plan,{faultAfterTable=null}={}){
 }
 // Deterministic, transaction-safe replay into a shadow ONLY. Exported for
 // isolated crash/retry unit tests; the server does not pass failure options.
-export function applyR43ShadowPatch(db,captures,{faultAfterTable=null}={}){
+export function applyR43ShadowPatch(db,captures,{faultAfterTable=null,secret}={}){
+  ensure(Buffer.isBuffer(secret)&&secret.length>=32,'external after-image key required');
   ensure(db&&typeof db.prepare==='function','shadow SQLite handle required');
   ensure(Array.isArray(captures)&&captures.length>0&&captures.length<=60,'invalid table capture');
   ensure(faultAfterTable===null||REPLAY_ORDER.includes(faultAfterTable),'unknown synthetic fault injection');
-  const {plan,counts,auditEventCount}=preparePlan(db,captures);
+  const {plan,counts,auditEventCount}=preparePlan(db,captures,secret);
   db.exec('BEGIN IMMEDIATE');
   try{
     const changes=executeChanges(db,plan,{faultAfterTable});
@@ -274,8 +285,8 @@ export async function runR43ShadowReplay({
     db.exec('PRAGMA foreign_keys=ON');
     baselineCheck(db,entry,maxRowsPerTable);
     const captures=await capturePgSnapshot(adapter,actorId,projectId,entry,maxRowsPerTable);
-    const initial=applyR43ShadowPatch(db,captures);
-    const retry=applyR43ShadowPatch(db,captures);
+    const initial=applyR43ShadowPatch(db,captures,{secret});
+    const retry=applyR43ShadowPatch(db,captures,{secret});
     ensure(retry.inserted===0&&retry.updated===0,'shadow replay is not idempotent');
     const token=createHmac('sha256',secret).update('r43-tenant:').update(projectId).digest('hex').slice(0,20);
     return {format:'osmanx-r43-shadow-replay-v1',syntheticOnly:true,readOnlySource:true,
