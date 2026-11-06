@@ -124,6 +124,11 @@ test('R4.0 write validates allowlist, origin and CSRF before SQL',async()=>{
     const update=await f.request(url+'/'+CLIENT,{method:'PATCH',csrf:f.first.csrf,body:{fullName:'Updated'}});
     assert.equal(update.status,200);
     assert.ok(f.calls.at(-1).sql.startsWith('UPDATE clients'));
+    assert.match(f.calls.at(-1).sql, /"full_name"=\$1/);
+    assert.match(f.calls.at(-1).sql, /updated_at=\$2/);
+    assert.match(f.calls.at(-1).sql, /WHERE id=\$3/);
+    assert.equal(f.calls.at(-2).sql,'SELECT updated_at FROM clients WHERE id=$1 AND archived_at IS NULL FOR UPDATE');
+    assert(f.calls.at(-1).params[1]>timestamp,'Optimistic client version must advance');
     assert.equal((await f.request(url+'/'+CLIENT,{method:'PATCH',csrf:f.first.csrf,body:{id:OWNER2}})).status,400);
   }finally{await f.end();}
 });
