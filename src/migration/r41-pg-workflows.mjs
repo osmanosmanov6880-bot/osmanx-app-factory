@@ -4,6 +4,8 @@
 import {randomUUID} from 'node:crypto';
 import {bodyJson, bad, json, ok, protectOrigin} from '../common/http.mjs';
 import {checkId, enumValue, nullableId, optionalIso, requireUser, shortText} from '../common/security.mjs';
+import {writePgPreviewAudit} from './r42-pg-audit.mjs';
+const auditEnabled=()=>process.env.OX_R42_PG_RECONCILIATION==='YES';
 
 const STATUSES=['todo','doing','done','cancelled'];
 const PRIORITIES=['low','medium','high'];
@@ -110,6 +112,7 @@ async function insertVisit(scope,data,ctx){
   const id=randomUUID(),now=new Date().toISOString();
   const rows=await scope.query(`INSERT INTO visits(id,client_id,occurred_at,note,created_by,created_at)
     VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,[id,v.clientId,v.occurredAt,v.note,ctx.createdBy,now]);
+  if(auditEnabled())await writePgPreviewAudit(scope,{actorUserId:ctx.createdBy,action:'create',entity:'visits',entityId:id});
   return mapVisit(rows.rows[0]);
 }
 async function insertTask(scope,data,ctx){
@@ -121,6 +124,7 @@ async function insertTask(scope,data,ctx){
   const rows=await scope.query(`INSERT INTO tasks(id,title,description,status,priority,due_at,client_id,assigned_to,created_by,created_at,updated_at)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
   [id,t.title,t.description??'',t.status??'todo',t.priority??'medium',t.dueAt??null,t.clientId??null,t.assignedTo??null,ctx.createdBy,now,now]);
+  if(auditEnabled())await writePgPreviewAudit(scope,{actorUserId:ctx.createdBy,action:'create',entity:'tasks',entityId:id});
   return mapTask(rows.rows[0]);
 }
 const columns=Object.freeze({title:'title',description:'description',status:'status',priority:'priority',dueAt:'due_at',clientId:'client_id',assignedTo:'assigned_to'});
@@ -193,6 +197,7 @@ export async function handleR41PreviewRequest(req,res,{studioDb,runtime,crmDb=nu
       if(ctx.staff)params.push(ctx.createdBy);
       const row=(await scope.query(q,params)).rows[0];
       if(!row)bad(409,'Конфликт обновления задачи');
+      if(auditEnabled())await writePgPreviewAudit(scope,{actorUserId:ctx.createdBy,action:'update',entity:'tasks',entityId:target});
       return mapTask(row);
     });
     return ok(res,{task:updated,source:'postgresql-preview'});

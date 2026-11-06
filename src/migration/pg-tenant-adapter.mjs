@@ -32,7 +32,8 @@ export class TenantPgAdapter {
     requireValue(this.projects.size>0,'No project tenants in manifest');
   }
 
-  async transaction({actorId,projectId,mode='read'},callback){
+  async transaction({actorId,projectId,mode='read',snapshot=false},callback){
+    requireValue(typeof snapshot==='boolean'&&(!snapshot||mode==='read'),'Snapshot must be read-only');
     requireValue(typeof actorId==='string' && actorId.length>=1 && actorId.length<=256,'Actor identity required');
     requireValue(typeof projectId==='string' && UUID.test(projectId),'Project UUID required');
     requireValue(['read','write'].includes(mode),'Unsupported transaction mode');
@@ -46,7 +47,7 @@ export class TenantPgAdapter {
     requireValue(client && typeof client.query==='function' && typeof client.release==='function','Invalid PostgreSQL connection');
     let active=false,broken=false;
     try{
-      await client.query(mode==='read'?'BEGIN READ ONLY':'BEGIN');
+      await client.query(snapshot?'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY':mode==='read'?'BEGIN READ ONLY':'BEGIN');
       active=true;
       await client.query(`SET LOCAL statement_timeout = '${this.statementTimeoutMs}ms'`);
       await client.query("SET LOCAL lock_timeout = '2000ms'");

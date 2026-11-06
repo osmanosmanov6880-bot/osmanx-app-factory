@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { bodyJson, bad, json, ok, protectOrigin } from '../common/http.mjs';
 import { requireUser, checkId, validateEmail, shortText } from '../common/security.mjs';
 import { TenantPgAdapter, openSignedTenantPgAdapter } from './pg-tenant-adapter.mjs';
+import {writePgPreviewAudit} from './r42-pg-audit.mjs';
+const auditEnabled=()=>process.env.OX_R42_PG_RECONCILIATION==='YES';
 
 export const R40_PREFIX = '/api/studio/pg-preview';
 const SOURCES = new Set(['unknown', 'walkin', 'social', 'referral', 'website', 'other']);
@@ -112,7 +114,9 @@ async function insertClient(scope, input) {
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
     RETURNING id, full_name, phone, email, source, notes, created_at, updated_at`,
     [id, data.fullName, data.phone, data.email, data.source, data.notes, now, now]);
-  return mapClient(result.rows[0]);
+  const client=mapClient(result.rows[0]);
+  if(auditEnabled())await writePgPreviewAudit(scope,{action:'create',entity:'clients',entityId:client.id});
+  return client;
 }
 
 export async function handleR40PreviewRequest(req, res, {studioDb, runtime}) {
@@ -178,6 +182,7 @@ export async function handleR40PreviewRequest(req, res, {studioDb, runtime}) {
       const result = await scope.query(`UPDATE clients SET ${assignments.join(', ')}, updated_at=$${columns.length+1}
         WHERE id=$${columns.length+2} AND archived_at IS NULL
         RETURNING id, full_name, phone, email, source, notes, created_at, updated_at`, args);
+      if(result.rows[0]&&auditEnabled())await writePgPreviewAudit(scope,{action:'update',entity:'clients',entityId:target});
       return result.rows[0] ? mapClient(result.rows[0]) : null;
     });
     if (!client) bad(404, 'Клиент не найден');
