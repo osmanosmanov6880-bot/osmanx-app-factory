@@ -1,0 +1,80 @@
+name: R4.0 authenticated PostgreSQL HTTP runtime preview (15/16)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server.mjs'
+      - 'src/migration/**'
+      - 'scripts/r40_pg_http_e2e.mjs'
+      - 'tests/r40_pg_http.test.mjs'
+      - 'package.json'
+      - '.github/workflows/r40-postgres-http-preview.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r40-postgres-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pg-http-preview:
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15', '16']
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r40-synthetic-only-ci-password
+          POSTGRES_DB: ox_test_factory_r40
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_test_factory_r40"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r40-synthetic-only-ci-password
+      PGDATABASE: ox_test_factory_r40
+      PGSSLMODE: disable
+      OX_R40_EPHEMERAL: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned Node.js PostgreSQL driver
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Install PostgreSQL client and verify isolated test DB
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE"
+      - name: Run security and transactional unit tests
+        run: |
+          npm run test:r40
+          node --check server.mjs
+          node --check scripts/r40_pg_http_e2e.mjs
+      - name: Real signed import and authenticated PostgreSQL HTTP acceptance
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          node scripts/r40_pg_http_e2e.mjs --confirm-synthetic | tee artifacts/r40-pg-${{ matrix.postgres }}.json
+      - name: Save only non-sensitive synthetic receipt
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r40-pg-${{ matrix.postgres }}-http-receipt
+          path: artifacts/r40-pg-${{ matrix.postgres }}.json
+          if-no-files-found: ignore
+          retention-days: 7

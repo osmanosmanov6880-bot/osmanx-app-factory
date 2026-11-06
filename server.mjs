@@ -10,6 +10,7 @@ import { handleSiteRequest } from './src/site/routes.mjs';
 import { bad, json, respondError, securityHeaders } from './src/common/http.mjs';
 import { sessionFromRequest, assertSafePublicBootstrap } from './src/common/security.mjs';
 import { acquireLock } from './src/common/maintenance.mjs';
+import { createR40Runtime, handleR40PreviewRequest, R40_PREFIX } from './src/migration/r40-pg-http.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url));
 const data=resolve(process.env.DATA_DIR || resolve(root,'data'));
@@ -17,6 +18,10 @@ const releaseLock=acquireLock(data,'server');
 let db;
 try{db=studioDb(resolve(data,'studio.sqlite'));}catch(e){releaseLock();throw e;}
 const crmCache=new Map();
+// Strictly opt-in PostgreSQL staging API. Any failed setup aborts server startup.
+let pgPreview;
+try {pgPreview=await createR40Runtime({studioDb:db});}
+catch(error) {db.close();releaseLock();throw error;}
 const port=Number(process.env.PORT||4173);
 const host=process.env.HOST||'127.0.0.1';
 assertSafePublicBootstrap(host,!!db.prepare('SELECT id FROM users LIMIT 1').get());
@@ -25,6 +30,7 @@ const server=createServer(async(req,res)=>{
     securityHeaders(res);
     const url=new URL(req.url,'http://localhost');
     if(url.pathname==='/api/health') return json(res,{ok:true,service:'osmanx-app-factory',version:'1.3.0'});
+    if(url.pathname.startsWith(R40_PREFIX + '/')) return await handleR40PreviewRequest(req,res,{studioDb:db,runtime:pgPreview});
     const match=url.pathname.match(/^\/workspace\/([0-9a-f-]{36})(\/.*|$)/);
     if(match) {
       const project=getProject(db,match[1]);
@@ -52,5 +58,5 @@ const server=createServer(async(req,res)=>{
   } catch(err) { respondError(res,err); }
 });
 server.listen(port,host,()=>console.log(`OSMANX APP FACTORY http://${host}:${port}`));
-function close() {server.close(()=>{for(const crm of crmCache.values())crm.close();db.close();releaseLock();process.exit(0);});}
+function close() {server.close(async()=>{try{await pgPreview?.close();}finally{for(const crm of crmCache.values())crm.close();db.close();releaseLock();process.exit(0);}});}
 process.on('SIGINT',close);process.on('SIGTERM',close);

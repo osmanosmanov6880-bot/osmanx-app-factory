@@ -1,3 +1,15 @@
+# OSMANX APP FACTORY R4.0 — PostgreSQL HTTP Preview (opt-in)
+
+> **R4.0 adds a real PostgreSQL-backed HTTP API ONLY for synthetic test deployments.** The factory, CMS and deployed CRM still run on SQLite. There is NO live customer migration, NO production cutover, NO public HTTPS certification. The PG Preview does not read or change the current SQLite CRM data; it uses a separately signed migration of a test copy.
+
+- Protected API: `GET /api/studio/pg-preview/status`; `GET /api/studio/pg-preview/projects/:uuid/clients?limit=25`; `GET /.../clients/:uuid`; `POST /.../clients`; `PATCH /.../clients/:uuid`; `POST /.../clients/batch` (1–10 clients, atomic).
+- Authorization: Studio owner cookie, exact project ownership and `clients` module, CSRF for writes, origin validation, bounded JSON. PostgreSQL access is delegated to an isolated NOINHERIT LOGIN role using signed per-project NOLOGIN roles and `SET LOCAL ROLE` in transactions. No user-submitted SQL.
+- Default **OFF**. Exact opt-in `OX_R40_PG_PREVIEW=YES`, `PGDATABASE=ox_test_factory_r40`, local `PGHOST=127.0.0.1`, explicit PGPORT, unprivileged PGUSER and PGPASSWORD, `OX_R40_PG_BUNDLE` pointing to a verified signed migration, and `OX_R40_PG_TRUST_KEY` pointing to an independently pinned public key. Requires `npm install` for the pinned `pg` driver.
+- Gate: `npm run test:r40`; `npm run pg:e2e:r40` with explicit synthetic, loopback-only PostgreSQL 15/16. GitHub Actions: `.github/workflows/r40-postgres-http-preview.yml`. No setup is automatic. **Never run this gate against real customer data**.
+- [R4.0 design and operator guide](docs/RELEASE_R40_POSTGRES_HTTP_PREVIEW.md).
+
+---
+
 > **R3.9 PostgreSQL Test Gate:** в коде добавлена изолированная проверка реального PostgreSQL 15/16 с синтетическими данными, подписанным импортом, аварийным откатом и 30 SQL-проверками полномочий ролей. GitHub Actions: `r39-postgres-15-16-acceptance.yml`. Подробнее: [`docs/RELEASE_R39_POSTGRES_LIVE_ACCEPTANCE.md`](docs/RELEASE_R39_POSTGRES_LIVE_ACCEPTANCE.md). Приложение **по-прежнему работает на SQLite**; включение PostgreSQL runtime не выполнялось.
 
 # OSMANX APP FACTORY R3.7 Preview — безопасные релизы и Docker-приёмка
