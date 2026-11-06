@@ -47,6 +47,11 @@ const r49WitnessKey=randomBytes(32).toString('hex');
 const r49WitnessToken=randomBytes(32).toString('hex');
 const r50EvidenceKey=randomBytes(32).toString('hex');
 let r49WitnessEndpoint='';
+const r51AnchorKey=randomBytes(32).toString('hex');
+const r51AnchorToken=randomBytes(32).toString('hex');
+const r51AlertKey=randomBytes(32).toString('hex');
+const r51AlertToken=randomBytes(32).toString('hex');
+let r51AnchorEndpoint='',r51AlertEndpoint='';
 let r46NextKeyActive=false;
 function check(ok,message) {if(!ok)throw Error(message);}
 function guard(){
@@ -185,7 +190,7 @@ async function main(){
   // The driver is loaded only in explicitly enabled test/runtime contexts.
   const {Pool}=await import('pg');
   const dir=await mkdtemp(join(tmpdir(),'ox-r40-http-'));
-  let server,adminPool,offsiteServer,witnessServer,alertServer,witness49Server;
+  let server,adminPool,offsiteServer,witnessServer,alertServer,witness49Server,r51AnchorServer,r51AlertServer;
   const alertReceived=[];
   try{
     if(process.env.OX_R47_E2E==='YES'){
@@ -225,6 +230,21 @@ async function main(){
         token:r49WitnessToken,secret:Buffer.from(r49WitnessKey,'hex')}));
       await new Promise(resolve=>witness49Server.listen(0,'127.0.0.1',resolve));
       r49WitnessEndpoint='http://127.0.0.1:'+witness49Server.address().port+'/';
+    }
+    if(process.env.OX_R51_E2E==='YES'){
+      const {createR51AlertChallengeReceiver}=
+        await import('../src/migration/r51-alert-ack.mjs');
+      // Separate test services with separate keys, roots and TCP listeners.
+      // They still share one CI runner: no real external resilience claim.
+      r51AnchorServer=createHttpServer(createR48WitnessReceiver({
+        root:join(dir,'r51-independent-audit'),token:r51AnchorToken,
+        secret:Buffer.from(r51AnchorKey,'hex')}));
+      await new Promise(resolve=>r51AnchorServer.listen(0,'127.0.0.1',resolve));
+      r51AnchorEndpoint='http://127.0.0.1:'+r51AnchorServer.address().port+'/';
+      r51AlertServer=createHttpServer(createR51AlertChallengeReceiver({
+        token:r51AlertToken,secret:Buffer.from(r51AlertKey,'hex')}));
+      await new Promise(resolve=>r51AlertServer.listen(0,'127.0.0.1',resolve));
+      r51AlertEndpoint='http://127.0.0.1:'+r51AlertServer.address().port+'/';
     }
     const dataDir=join(dir,'data');const bundle=join(dir,'signed-export');
     await mkdir(join(dataDir,'projects'),{recursive:true,mode:0o700});
@@ -737,6 +757,68 @@ async function main(){
           evidenceHeadSha256:'f'.repeat(64)},approvals,trustedPublicKeys});}
         catch{badReviewRejected=true;}
         check(badReviewRejected,'R5.0 accepted signatures for another evidence digest');checks++;
+        if(process.env.OX_R51_E2E==='YES'){
+          const {createR51EvidenceAnchorClient,anchorR51Evidence,
+            verifyR51EvidenceAnchor}=await import('../src/migration/r51-anchor.mjs');
+          const {createR51AlertChallengeClient}=
+            await import('../src/migration/r51-alert-ack.mjs');
+          const {runR51OperationalReadiness}=
+            await import('../src/migration/r51-readiness.mjs');
+          const anchor=createR51EvidenceAnchorClient({
+            endpoint:r51AnchorEndpoint,token:r51AnchorToken,
+            secret:Buffer.from(r51AnchorKey,'hex'),
+            tenantToken:token,allowSyntheticLoopback:true});
+          const alert=createR51AlertChallengeClient({
+            endpoint:r51AlertEndpoint,token:r51AlertToken,
+            secret:Buffer.from(r51AlertKey,'hex'),
+            tenantToken:token,allowSyntheticLoopback:true});
+          const scope={vault,remote,witness,anchor,evidence,alert,
+            storageEndpoint:cfg.endpoint,witnessEndpoint:r49WitnessEndpoint,
+            anchorEndpoint:r51AnchorEndpoint,alertEndpoint:r51AlertEndpoint,
+            witnessKey:Buffer.from(r49WitnessKey,'hex'),
+            anchorKey:Buffer.from(r51AnchorKey,'hex'),
+            alertKey:Buffer.from(r51AlertKey,'hex'),
+            allowSyntheticLoopback:true,
+            resolver:async()=>[{address:'127.0.0.1',family:4}]};
+          const published=await anchorR51Evidence(scope);
+          check(published.anchorVerified===true&&published.anchorRecords===1&&
+            published.productionCutoverAllowed===false,
+            'R5.1 external HMAC audit anchor did not confirm signed recovery');checks++;
+          const accepted=await runR51OperationalReadiness(scope);
+          check(accepted.engineeringEvidenceVerified===true&&
+            accepted.externallyAnchoredEvidenceVerified===true&&
+            accepted.signedMachineAlertAcknowledged===true&&
+            accepted.fourEndpointsChecked===4&&
+            accepted.humanOnCallVerified===false&&
+            accepted.geographicalFailureDomainsVerified===false&&
+            accepted.productionCutoverAllowed===false,
+            'R5.1 separate machine acknowledgement or signed audit verification failed');checks++;
+          // A new valid R5.0 ledger entry makes the OLD signed independent
+          // remote audit anchor stale. The readiness gate must fail closed.
+          await (await import('../src/migration/r50-evidence.mjs'))
+            .appendR50Evidence(evidence,{
+              verdict:'PASS',reasonCode:'VERIFIED',
+              catalogSha256:drill.archivedCatalogSha256,
+              witnessConfirmed:true,signedRestoreVerified:true,
+              elapsedMs:drill.elapsedRecoveryMs,confirmedAgeMs:drill.confirmedBackupAgeMs});
+          let staleAnchorDenied=false;
+          try{await verifyR51EvidenceAnchor(scope);}
+          catch{staleAnchorDenied=true;}
+          check(staleAnchorDenied,'R5.1 accepted the old valid external audit head');checks++;
+          const advanced=await anchorR51Evidence(scope);
+          check(advanced.anchorRecords===2&&
+            (await verifyR51EvidenceAnchor(scope)).remoteAnchorVerified===true,
+            'R5.1 monotonic independent audit anchor did not advance');checks++;
+          const attacker=createR51EvidenceAnchorClient({
+            endpoint:r51AnchorEndpoint,token:randomBytes(32).toString('hex'),
+            secret:Buffer.from(r51AnchorKey,'hex'),
+            tenantToken:token,allowSyntheticLoopback:true});
+          let denied=false;
+          try{await attacker.current();}catch{denied=true;}
+          check(denied,'R5.1 untrusted audit bearer obtained signed remote head');checks++;
+          check((await runR51OperationalReadiness(scope)).productionCutoverAllowed===false,
+            'R5.1 remote signed audit incorrectly permitted production cutover');checks++;
+        }
         const stale=await runR50RecoveryExercise({...offlineArgs,...topology,evidence,
           now:Date.now()+3600000,maxRtoMs:120000,maxBackupAgeMs:60000});
         check(stale.syntheticDrillAccepted===false&&stale.meetsBackupAge===false&&
@@ -874,6 +956,7 @@ async function main(){
       r48IndependentWitnessAndMeasuredRecoveryVerified:process.env.OX_R48_E2E==='YES',
       r49LiveS3ObjectLockAndOfflineRestoreVerified:process.env.OX_R49_E2E==='YES',
       r50SyntheticOperationalGateAndDetachedRecoveryVerified:process.env.OX_R50_E2E==='YES',
+      r51IndependentAuditAndSignedAlertVerified:process.env.OX_R51_E2E==='YES',
       privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));
@@ -883,6 +966,8 @@ async function main(){
     if(witnessServer)await new Promise(resolve=>witnessServer.close(resolve));
     if(alertServer)await new Promise(resolve=>alertServer.close(resolve));
     if(witness49Server)await new Promise(resolve=>witness49Server.close(resolve));
+    if(r51AnchorServer)await new Promise(resolve=>r51AnchorServer.close(resolve));
+    if(r51AlertServer)await new Promise(resolve=>r51AlertServer.close(resolve));
     if(adminPool)await adminPool.end();
     await rm(dir,{recursive:true,force:true});
   }
