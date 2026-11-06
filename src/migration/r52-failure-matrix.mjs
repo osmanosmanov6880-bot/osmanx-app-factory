@@ -35,7 +35,7 @@ export async function runR52FailureMatrix({
   const results=[];
   for(const scenario of scenarios){
     let isolated=false,negative=false,restored=false;
-    let recoveryMs=0,restoreError=null;
+    let recoveryMs=0,restoreError=null,recoveryStarted=0;
     try{
       // If isolate() fails, cleanup still calls restore() to avoid
       // leaving any test service in an unknown state.
@@ -46,12 +46,12 @@ export async function runR52FailureMatrix({
         negative=!accepted(result);
       }catch{negative=true;}
     }finally{
-      const begin=performance.now();
+      recoveryStarted=performance.now();
       if(isolated){
         try{await scenario.restore();restored=true;}
         catch(e){restoreError=e;}
       }
-      recoveryMs=cap(performance.now()-begin);
+      // Full readiness is timed below, not just the service restart.
     }
     // Never mask restoration failures with successful negative tests.
     if(restoreError)throw Error('R5.2 failure drill refused: '+
@@ -59,9 +59,10 @@ export async function runR52FailureMatrix({
     await fingerprint();
     deny(negative,scenario.name+' outage did not disable readiness');
     deny(restored,scenario.name+' was not restored');
-    deny(recoveryMs<=maxRecoveryMs,scenario.name+' restore exceeded synthetic deadline');
     const check=await probe();
+    recoveryMs=cap(performance.now()-recoveryStarted);
     deny(accepted(check),scenario.name+' failed health/readiness after restart');
+    deny(recoveryMs<=maxRecoveryMs,scenario.name+' restart and signed revalidation exceeded synthetic deadline');
     results.push(Object.freeze({service:scenario.name,failClosed:true,
       restored:true,recoveryMs,postRestoreRevalidated:true}));
   }
