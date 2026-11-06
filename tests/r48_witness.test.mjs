@@ -51,7 +51,7 @@ test('R4.8 witness refuses wrong bearer, wrong HMAC key and non-loopback clearte
     await f.client.commit({catalogSha256:first,manifestSha256:manifest,entries:1});
     const badBearer=createR48WitnessClient({endpoint:f.endpoint,
       token:randomBytes(32).toString('hex'),secret:f.secret,tenant,allowSyntheticLoopback:true});
-    await assert.rejects(badBearer.current(),/read witness status 404/);
+    await assert.rejects(badBearer.current(),/read witness status 401/);
     const badKey=createR48WitnessClient({endpoint:f.endpoint,token:f.token,
       secret:randomBytes(32),tenant,allowSyntheticLoopback:true});
     await assert.rejects(badKey.current(),/invalid witness signature/);
