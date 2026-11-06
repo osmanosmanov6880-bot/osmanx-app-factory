@@ -15,6 +15,7 @@ import {handleR41PreviewRequest} from './src/migration/r41-pg-workflows.mjs';
 import {handleR42Request,validateR42Options,R42_PATH} from './src/migration/r42-pg-http.mjs';
 import {handleR43Request,validateR43Options,R43_PATH} from './src/migration/r43-pg-http.mjs';
 import {handleR45Request,validateR45Options,R45_PATH} from './src/migration/r45-http.mjs';
+import {handleR46Request,validateR46Options,R46_PATH} from './src/migration/r46-http.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url));
 const data=resolve(process.env.DATA_DIR || resolve(root,'data'));
@@ -23,11 +24,12 @@ let db;
 try{db=studioDb(resolve(data,'studio.sqlite'));}catch(e){releaseLock();throw e;}
 const crmCache=new Map();
 // Strictly opt-in PostgreSQL staging API. Any failed setup aborts server startup.
-let pgPreview,r42Options,r43Options,r45Options;
+let pgPreview,r42Options,r43Options,r45Options,r46Options;
 try {
   r42Options=validateR42Options(process.env);
   r43Options=validateR43Options(process.env);
   r45Options=validateR45Options(process.env);
+  r46Options=validateR46Options(process.env);
   pgPreview=await createR40Runtime({studioDb:db});
 } catch(error) {db.close();releaseLock();throw error;}
 const port=Number(process.env.PORT||4173);
@@ -38,6 +40,8 @@ const server=createServer(async(req,res)=>{
     securityHeaders(res);
     const url=new URL(req.url,'http://localhost');
     if(url.pathname==='/api/health') return json(res,{ok:true,service:'osmanx-app-factory',version:'1.3.0'});
+    if(R46_PATH.test(url.pathname))
+      return await handleR46Request(req,res,{studioDb:db,runtime:pgPreview,dataDir:data,options:r46Options});
     if(R45_PATH.test(url.pathname))
       return await handleR45Request(req,res,{studioDb:db,runtime:pgPreview,dataDir:data,options:r45Options});
     if(R43_PATH.test(url.pathname))
