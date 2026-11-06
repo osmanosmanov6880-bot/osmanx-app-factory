@@ -643,8 +643,14 @@ async function main(){
         accessKey:cfg.accessKey,secretKey:cfg.secretKey});
       const denied=await fetch(uri.origin+pathname+'?'+query,{method:'DELETE',
         headers:signed,signal:AbortSignal.timeout(10000)});
-      check([403,409].includes(denied.status),
-        'R4.9 COMPLIANCE locked synthetic archive was deletable');checks++;
+      const deletionBody=await denied.text();
+      check([403,409].includes(denied.status)&&
+        /AccessDenied|ObjectLocked|WORM|retention/i.test(deletionBody)&&
+        !/SignatureDoesNotMatch|InvalidAccessKeyId|AuthorizationHeaderMalformed/i.test(deletionBody),
+        'R4.9 exact-version delete denial was not a WORM policy decision');checks++;
+      const stillLocked=await remote.get('archives/'+id+'.oxb');
+      check(stillLocked.length>0,'R4.9 protected archive disappeared after denied delete');checks++;
+      stillLocked.fill(0);
       const originalHead=await remote.get('head.json');
       const copy=await afterRestart('/api/studio/pg-preview/projects/'+projectA+
         '/backup-vault/create','POST');
