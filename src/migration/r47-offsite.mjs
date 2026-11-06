@@ -176,8 +176,19 @@ export async function inspectR47OffsiteStatus(input){
   try{
     const {pointer,parsed}=await readRemoteCatalog(vault,remote);
     const current=pointer.catalogSha256===sha(local.bytes);
+    // A catalog alone is not a restore. Require a full encrypted-object
+    // readback and authenticated decryption of the newest signed archive
+    // before reporting the offsite storage as healthy.
+    const latest=parsed.active.at(-1);
+    guard(latest,'no signed remote archive to verify');
+    const ciphertext=await remote.get('archives/'+latest.id+'.oxb');
+    try{
+      const plaintext=verifyEncrypted(ciphertext,latest,vault);
+      plaintext.fill(0);
+    }finally{ciphertext.fill(0);}
     return {format:'osmanx-r47-offsite-status-v1',remoteReachable:true,
       remoteSignedCatalogValid:true,remoteMatchesLocal:current,
+      newestArchiveVerified:true,
       remoteArchives:parsed.active.length,localArchives:local.verified.active.length,
       remoteCatalogSha256:pointer.catalogSha256,healthy:current,
       productionCutoverAllowed:false};
