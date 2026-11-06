@@ -1,0 +1,50 @@
+# Deploy on a physically distinct witness VPS, never on the S3 host.
+# Fill variable names from environment; keep credential VALUES in 0600 secret files.
+services:
+  witness:
+    build:
+      context: ../..
+      dockerfile: ops/r49/Dockerfile.witness
+    restart: unless-stopped
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=8m,noexec,nosuid"]
+    secrets: [witness_token, witness_key]
+    environment:
+      OX_R49_WITNESS_TOKEN_FILE: /run/secrets/witness_token
+      OX_R49_WITNESS_HMAC_KEY_FILE: /run/secrets/witness_key
+    volumes: ["witness_state:/state"]
+    expose: ["9080"]
+    networks: [private]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('node:http').get('http://127.0.0.1:9080/healthz', r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  tls:
+    image: caddy:2.9-alpine
+    restart: unless-stopped
+    depends_on: [witness]
+    ports: ["80:80", "443:443"]
+    environment:
+      OX_R49_WITNESS_DOMAIN: ${OX_R49_WITNESS_DOMAIN:?set DNS hostname}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [private, public]
+    security_opt: ["no-new-privileges:true"]
+secrets:
+  witness_token:
+    file: ${OX_R49_WITNESS_TOKEN_FILE:?set token file path}
+  witness_key:
+    file: ${OX_R49_WITNESS_KEY_FILE:?set hmac key file path}
+volumes:
+  witness_state:
+  caddy_data:
+  caddy_config:
+networks:
+  private:
+    internal: true
+  public:

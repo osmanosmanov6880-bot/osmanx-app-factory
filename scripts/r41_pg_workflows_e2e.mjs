@@ -43,6 +43,9 @@ const r48QueueKey=randomBytes(32).toString('hex');
 const r48WebhookKey=randomBytes(32).toString('hex');
 const r48Bearer=randomBytes(32).toString('hex');
 let r48WitnessEndpoint='',r48AlertEndpoint='';
+const r49WitnessKey=randomBytes(32).toString('hex');
+const r49WitnessToken=randomBytes(32).toString('hex');
+let r49WitnessEndpoint='';
 let r46NextKeyActive=false;
 function check(ok,message) {if(!ok)throw Error(message);}
 function guard(){
@@ -181,7 +184,7 @@ async function main(){
   // The driver is loaded only in explicitly enabled test/runtime contexts.
   const {Pool}=await import('pg');
   const dir=await mkdtemp(join(tmpdir(),'ox-r40-http-'));
-  let server,adminPool,offsiteServer,witnessServer,alertServer;
+  let server,adminPool,offsiteServer,witnessServer,alertServer,witness49Server;
   const alertReceived=[];
   try{
     if(process.env.OX_R47_E2E==='YES'){
@@ -210,6 +213,17 @@ async function main(){
       });
       await new Promise(resolve=>alertServer.listen(0,'127.0.0.1',resolve));
       r48AlertEndpoint='http://127.0.0.1:'+alertServer.address().port+'/';
+    }
+    if(process.env.OX_R49_E2E==='YES'){
+      check(process.env.OX_R49_S3_ENDPOINT?.startsWith('http://127.0.0.1:')&&
+        process.env.OX_R49_S3_BUCKET==='r49-synthetic-worm'&&
+        process.env.OX_R49_S3_ACCESS_KEY&&process.env.OX_R49_S3_SECRET_KEY,
+        'R4.9 requires isolated live MinIO on loopback and synthetic credentials');
+      witness49Server=createHttpServer(createR48WitnessReceiver({
+        root:join(dir,'r49-separate-witness'),
+        token:r49WitnessToken,secret:Buffer.from(r49WitnessKey,'hex')}));
+      await new Promise(resolve=>witness49Server.listen(0,'127.0.0.1',resolve));
+      r49WitnessEndpoint='http://127.0.0.1:'+witness49Server.address().port+'/';
     }
     const dataDir=join(dir,'data');const bundle=join(dir,'signed-export');
     await mkdir(join(dataDir,'projects'),{recursive:true,mode:0o700});
@@ -584,6 +598,96 @@ async function main(){
       check(proof.data.result.signedRestoreVerified===true&&
         proof.data.result.financialRecords>=1,'R4.8 financial restore failed after restart');checks++;
     }
+    if(process.env.OX_R49_E2E==='YES'){
+      const {createR48S3Transport,signR48S3Request}=await import('../src/migration/r48-s3.mjs');
+      const {createR48WitnessClient}=await import('../src/migration/r48-witness.mjs');
+      const {r47TenantToken}=await import('../src/migration/r47-offsite.mjs');
+      const {publishR49IndependentlyLockedBackup,restoreR49Offline}=
+        await import('../src/migration/r49-operational-dr.mjs');
+      const catalogKey=Buffer.from(r46CatalogKey,'hex');
+      const token=r47TenantToken(catalogKey,projectA);
+      const verified=(await verifyTrustedMigration(bundle,keys.publicKey));
+      const vault={directory:join(dataDir,'.r46-encrypted-vault',projectA),
+        projectId:projectA,manifestSha256:verified.manifestSha256,catalogKey,
+        keyRing:{activeId:'key_two',
+          keys:{key_one:Buffer.from(r46OldKey,'hex'),key_two:Buffer.from(r46NewKey,'hex')}}};
+      const cfg={endpoint:process.env.OX_R49_S3_ENDPOINT,
+        bucket:process.env.OX_R49_S3_BUCKET,
+        region:process.env.OX_R49_S3_REGION||'us-east-1',
+        accessKey:process.env.OX_R49_S3_ACCESS_KEY,
+        secretKey:process.env.OX_R49_S3_SECRET_KEY,
+        projectPrefix:token+'/',allowSyntheticLoopback:true};
+      const remote=createR48S3Transport(cfg);
+      const witness=createR48WitnessClient({endpoint:r49WitnessEndpoint,
+        token:r49WitnessToken,secret:Buffer.from(r49WitnessKey,'hex'),
+        tenant:token,allowSyntheticLoopback:true});
+      const first=await publishR49IndependentlyLockedBackup({vault,remote,witness});
+      check(first.independentWitnessVerified===true&&first.remoteArchives>=2&&
+        first.s3ComplianceObjectVersionsVerified===first.remoteArchives+2&&
+        first.productionCutoverAllowed===false,
+        'R4.9 real MinIO S3 retention and witness gate failed');checks++;
+      const newest=(await import('../src/migration/r46-vault.mjs'))
+        .listR46Vault(vault);
+      const catalog=await newest;
+      const id=catalog.archives[0].id;
+      const locked=await remote.inspectR49Worm('archives/'+id+'.oxb');
+      check(locked.objectLockVerified===true&&locked.versionId,
+        'R4.9 S3 object version ID or COMPLIANCE mode missing');checks++;
+      // Attempt to delete exactly the signed synthetic version with the
+      // test root credentials; COMPLIANCE protection must block deletion.
+      const uri=new URL(cfg.endpoint);
+      const pathname='/'+cfg.bucket+'/'+token+'/archives/'+id+'.oxb';
+      const query='versionId='+encodeURIComponent(locked.versionId);
+      const signed=signR48S3Request({method:'DELETE',path:pathname,query,
+        body:Buffer.alloc(0),host:uri.host,region:cfg.region,
+        accessKey:cfg.accessKey,secretKey:cfg.secretKey});
+      const denied=await fetch(uri.origin+pathname+'?'+query,{method:'DELETE',
+        headers:signed,signal:AbortSignal.timeout(10000)});
+      const deletionBody=await denied.text();
+      const s3ErrorCode=(deletionBody.match(/<Code>([A-Za-z0-9_]+)<\/Code>/)||[])[1]||'none';
+      const s3ErrorMessage=(deletionBody.match(/<Message>([^<]{0,240})<\/Message>/)||[])[1]||'none';
+      const explicitWormDenial=([403,409].includes(denied.status)&&
+        /AccessDenied|ObjectLocked|WORM|retention/i.test(deletionBody))||
+        (denied.status===400&&s3ErrorCode==='InvalidRequest'&&
+          /^Object is WORM protected and cannot be overwritten/.test(s3ErrorMessage));
+      check(explicitWormDenial&&
+        !/SignatureDoesNotMatch|InvalidAccessKeyId|AuthorizationHeaderMalformed/i.test(deletionBody),
+        'R4.9 exact-version delete denied incorrectly (HTTP '+denied.status+
+          ', S3 code '+s3ErrorCode+', message '+s3ErrorMessage+')');checks++;
+      const stillLocked=await remote.get('archives/'+id+'.oxb');
+      check(stillLocked.length>0,'R4.9 protected archive disappeared after denied delete');checks++;
+      stillLocked.fill(0);
+      const originalHead=await remote.get('head.json');
+      const copy=await afterRestart('/api/studio/pg-preview/projects/'+projectA+
+        '/backup-vault/create','POST');
+      requireStatus(copy,200,'R4.9 adds another signed CRM snapshot');
+      const second=await publishR49IndependentlyLockedBackup({vault,remote,witness});
+      check(second.independentWitnessVerified===true&&second.remoteArchives>=3,
+        'R4.9 witness did not advance after new COMPLIANCE copy');checks++;
+      const newestHead=await remote.get('head.json');
+      await remote.put('head.json',originalHead); // new current version of an older valid head
+      const recoveredDir=join(dir,'r49-disaster-recovery');
+      const offlineArgs={vault:{...vault,directory:join(dir,'lost-local-disk')},
+        remote,witness,bundleDir:bundle,trustedPublicKey:keys.publicKey,
+        recoveryDirectory:recoveredDir};
+      let refusedRollback=false;
+      try{await restoreR49Offline(offlineArgs);}
+      catch(e){refusedRollback=/witness|older|different/.test(e.message);}
+      check(refusedRollback,'R4.9 accepted an older valid S3 head after independent witness advanced');checks++;
+      await remote.put('head.json',newestHead);
+      const recovery=await restoreR49Offline(offlineArgs);
+      check(recovery.signedTablesVerified>=1&&recovery.financialRecords>=1&&
+        recovery.objectLockVerified===true&&recovery.catalogWitnessVerified===true&&
+        Number.isInteger(recovery.measuredRecoveryMs)&&
+        recovery.productionCutoverAllowed===false,
+        'R4.9 independently restored signed full CRM data incorrectly');checks++;
+      const recovered=crmDb(recovery.outputFile);
+      try{
+        check(recovered.prepare('SELECT amount_minor FROM payments').get().amount_minor===12500&&
+          recovered.prepare('SELECT count(*) AS n FROM clients').get().n===1,
+          'R4.9 isolated recovery altered or lost signed CRM financial data');checks++;
+      }finally{recovered.close();}
+    }
     const afterTasks=await afterRestart(tasksA),afterVisits=await afterRestart(visitsA);
     requireStatus(afterTasks,200,'Task persists after server restart');
     requireStatus(afterVisits,200,'Visits persist after server restart');
@@ -664,6 +768,7 @@ async function main(){
       r46RetainedEncryptedVaultVerified:process.env.OX_R46_E2E==='YES',
       r47OffsiteIndependentRecoveryVerified:process.env.OX_R47_E2E==='YES',
       r48IndependentWitnessAndMeasuredRecoveryVerified:process.env.OX_R48_E2E==='YES',
+      r49LiveS3ObjectLockAndOfflineRestoreVerified:process.env.OX_R49_E2E==='YES',
       privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));
@@ -672,6 +777,7 @@ async function main(){
     if(offsiteServer)await new Promise(resolve=>offsiteServer.close(resolve));
     if(witnessServer)await new Promise(resolve=>witnessServer.close(resolve));
     if(alertServer)await new Promise(resolve=>alertServer.close(resolve));
+    if(witness49Server)await new Promise(resolve=>witness49Server.close(resolve));
     if(adminPool)await adminPool.end();
     await rm(dir,{recursive:true,force:true});
   }
