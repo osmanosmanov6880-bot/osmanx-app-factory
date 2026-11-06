@@ -33,7 +33,11 @@ export function verifyR50IndependentReviews({challenge,approvals,trustedPublicKe
     deny(item&&ROLES.includes(item.role)&&!seen.has(item.role),
       'review roles must be distinct');
     seen.add(item.role);
-    let pub;try{pub=createPublicKey(trustedPublicKeys[item.role]);}
+    let pub;try{
+      const trusted=trustedPublicKeys[item.role];
+      pub=trusted?.type==='public'&&trusted?.asymmetricKeyType==='ed25519'?
+        trusted:createPublicKey(trusted);
+    }
     catch{throw Error('R5.0 independent review refused: trusted review public key missing');}
     deny(pub.asymmetricKeyType==='ed25519','review key must be Ed25519');
     const fp=createHash('sha256').update(pub.export({format:'der',type:'spki'})).digest('hex');
