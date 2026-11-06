@@ -10,7 +10,7 @@ import {quoteIdent} from './pg-kit.mjs';
 import {verifyTrustedMigration} from './pg-trust.mjs';
 import {r43AfterImageHmac,r43AuditVersion} from './r42-pg-audit.mjs';
 
-const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MUTABLE=new Set(['clients','tasks','visits']);
 const REPLAY_ORDER=['clients','tasks','visits','audit_log'];
 function ensure(ok,message){if(!ok)throw Error('R4.3 shadow replay denied: '+message);}
