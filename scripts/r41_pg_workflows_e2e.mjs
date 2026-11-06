@@ -56,7 +56,8 @@ async function launchFactory(dataDir,bundle,keyPath,pgUser,pgPass){
     OX_R40_PG_BUNDLE:bundle,OX_R40_PG_TRUST_KEY:keyPath,OX_R40_EPHEMERAL:'YES',
      OX_R42_PG_RECONCILIATION:'YES',OX_R42_JOURNAL_HMAC_KEY:r42Secret,
     ...(process.env.OX_R43_E2E==='YES'?{OX_R43_SHADOW_REPLAY:'YES',OX_R43_CONFIRM_SYNTHETIC:'YES'}:{}),
-    ...(process.env.OX_R44_E2E==='YES'?{OX_R44_CRITICAL_PARITY:'YES',OX_R44_CONFIRM_SYNTHETIC:'YES'}:{})};
+    ...(process.env.OX_R44_E2E==='YES'?{OX_R44_CRITICAL_PARITY:'YES',OX_R44_CONFIRM_SYNTHETIC:'YES'}:{}),
+    ...(process.env.OX_R45_E2E==='YES'?{OX_R45_BACKUP_DRILL:'YES',OX_R45_CONFIRM_SYNTHETIC:'YES'}:{})};
   const server=spawn(process.execPath,['server.mjs'],{cwd:new URL('../',import.meta.url),env,stdio:['ignore','pipe','pipe']});
   let tail='';let closed=false;
   server.stderr.on('data',b=>{tail=(tail+b.toString('utf8')).slice(-600);});
@@ -188,6 +189,36 @@ async function main(){
     check(pristine.data.report.ok===true&&pristine.data.report.totalDifferences===0&&
       pristine.data.readiness.productionCutoverAllowed===false,'Initial signed reconciliation mismatch');checks++;
     requireStatus(await reqB(reconcilePath+'/check','POST'),404,'R4.2 foreign owner denied');
+    if(process.env.OX_R45_E2E==='YES'){
+      const drillPath='/api/studio/pg-preview/projects/'+projectA+'/backup-drill';
+      const receipt=await reqA(drillPath+'/check','POST');
+      requireStatus(receipt,200,'R4.5 encrypted CRM backup and signed restore');
+      const proof=receipt.data.receipt;
+      check(proof?.verified===true&&proof.signedManifestVerified===true&&
+        proof.encryptedArchiveVerified===true&&proof.decryptedBytesVerified===true&&
+        proof.sqliteIntegrityVerified===true&&proof.foreignKeyIntegrityVerified===true&&
+        proof.financialRecords>=1&&proof.automationRules>=1&&proof.automationRuns>=1&&
+        proof.customEntities>=1&&proof.customRecords>=1&&
+        /^[a-f0-9]{64}$/.test(proof.financialTotalsHmac)&&
+        proof.sourcePrimaryModified===false&&proof.productionCutoverAllowed===false,
+        'R4.5 encrypted backup restoration or financial proof failed');checks++;
+      check(!JSON.stringify(receipt.data).includes('Synthetic invoice')&&
+        !JSON.stringify(receipt.data).includes('Test booking'),'R4.5 leaked CRM record values');checks++;
+      requireStatus(await reqB(drillPath+'/check','POST'),404,'R4.5 cross-owner backup denied');
+      requireStatus(await reqA(drillPath+'/check','POST',undefined,'wrong-csrf'),403,
+        'R4.5 CSRF backup rejected');
+      requireStatus(await reqA(drillPath+'/check','GET'),405,'R4.5 GET cannot run backup drill');
+      const history=await reqA(drillPath+'/history');
+      requireStatus(history,200,'R4.5 verified encrypted restore evidence history');
+      check(history.data.entries===1&&history.data.history[0].verified===true,
+        'R4.5 evidence journal missing');checks++;
+      const unchanged=crmDb(join(dataDir,'projects',projectA+'.sqlite'));
+      try{
+        check(unchanged.prepare('SELECT amount_minor FROM payments').get().amount_minor===12500&&
+          unchanged.prepare('SELECT count(*) AS n FROM clients').get().n===1,
+          'R4.5 unexpectedly modified live primary');checks++;
+      }finally{unchanged.close();}
+    }
     const firstA=await reqA(pathA);requireStatus(firstA,200,'Owner A read');
     check(firstA.data.clients.length===1 && firstA.data.clients[0].fullName==='Original A','Owner A sees only own imported rows');checks++;
     const firstB=await reqB(pathB);requireStatus(firstB,200,'Owner B read');
@@ -378,6 +409,7 @@ async function main(){
       initialDriftZero:true,subsequentDriftDetected:true,ownerReconciliationProtected:true,
       r43ShadowReplayVerified:process.env.OX_R43_E2E==='YES',
       r44CriticalParityVerified:process.env.OX_R44_E2E==='YES',
+      r45EncryptedRestoreVerified:process.env.OX_R45_E2E==='YES',
       privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));
