@@ -1,0 +1,97 @@
+name: R4.7 PostgreSQL 15 16 remote encrypted backup and recovery
+on:
+  push:
+    branches: ['feat/r47-offsite-scheduler-recovery', main]
+    paths:
+      - 'src/migration/**'
+      - 'server.mjs'
+      - 'scripts/r41_pg_workflows_e2e.mjs'
+      - 'tests/r47_*.test.mjs'
+      - 'package.json'
+      - '.github/workflows/r47-pg-offsite-recovery.yml'
+  pull_request:
+    paths:
+      - 'src/migration/**'
+      - 'server.mjs'
+      - 'scripts/r41_pg_workflows_e2e.mjs'
+      - 'tests/r47_*.test.mjs'
+      - 'package.json'
+      - '.github/workflows/r47-pg-offsite-recovery.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: r47-offsite-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  synthetic-offsite-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r47-synthetic-only-ci
+          POSTGRES_DB: ox_test_factory_r40
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_test_factory_r40"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r47-synthetic-only-ci
+      PGDATABASE: ox_test_factory_r40
+      PGSSLMODE: disable
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R43_E2E: 'YES'
+      OX_R44_E2E: 'YES'
+      OX_R45_E2E: 'YES'
+      OX_R46_E2E: 'YES'
+      OX_R47_E2E: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned PostgreSQL driver
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Check isolated PostgreSQL service
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE"
+      - name: Verify offsite, recovery, security and ancestor regression suites
+        run: |
+          npm run test:r47
+          npm run test:r46
+          npm run test:r45
+          npm run test:r44
+          npm run test:r43
+          npm run test:r42
+          npm run test:r41
+          npm run test:r40
+          node --check server.mjs
+          node --check scripts/r41_pg_workflows_e2e.mjs
+          node --check src/migration/r47-offsite.mjs
+          node --check src/migration/r47-scheduler.mjs
+      - name: Signed PostgreSQL CRM and independent encrypted remote disaster restore
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          node scripts/r41_pg_workflows_e2e.mjs --confirm-synthetic | tee artifacts/r47-pg-${{ matrix.postgres }}.json
+      - name: Store synthetic receipts only, never encryption keys
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r47-pg-${{ matrix.postgres }}-synthetic
+          path: artifacts/r47-pg-${{ matrix.postgres }}.json
+          retention-days: 7
+          if-no-files-found: ignore
