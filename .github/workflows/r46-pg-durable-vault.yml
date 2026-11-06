@@ -1,0 +1,96 @@
+name: R4.6 isolated PostgreSQL 15 16 durable vault recovery
+on:
+  push:
+    branches: ['feat/r46-durable-encrypted-vault', main]
+    paths:
+      - 'src/migration/**'
+      - 'server.mjs'
+      - 'scripts/r41_pg_workflows_e2e.mjs'
+      - 'tests/r46_*.test.mjs'
+      - 'package.json'
+      - '.github/workflows/r46-pg-durable-vault.yml'
+  pull_request:
+    paths:
+      - 'src/migration/**'
+      - 'server.mjs'
+      - 'scripts/r41_pg_workflows_e2e.mjs'
+      - 'tests/r46_*.test.mjs'
+      - 'package.json'
+      - '.github/workflows/r46-pg-durable-vault.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: r46-vault-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  retained-encrypted-backups:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r46-synthetic-only-ci
+          POSTGRES_DB: ox_test_factory_r40
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_test_factory_r40"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r46-synthetic-only-ci
+      PGDATABASE: ox_test_factory_r40
+      PGSSLMODE: disable
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R43_E2E: 'YES'
+      OX_R44_E2E: 'YES'
+      OX_R45_E2E: 'YES'
+      OX_R46_E2E: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install locked driver
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Test PostgreSQL readiness
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE"
+      - name: Vault, cryptography, auth and ancestor regression tests
+        run: |
+          npm run test:r46
+          npm run test:r45
+          npm run test:r44
+          npm run test:r43
+          npm run test:r42
+          npm run test:r41
+          npm run test:r40
+          node --check server.mjs
+          node --check scripts/r41_pg_workflows_e2e.mjs
+          node --check src/migration/r46-vault.mjs
+          node --check src/migration/r46-recovery.mjs
+          node --check src/migration/r46-http.mjs
+      - name: Signed populated CRM + persistent encrypted backup + restart + key rotation + pruning
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          node scripts/r41_pg_workflows_e2e.mjs --confirm-synthetic | tee artifacts/r46-pg-${{ matrix.postgres }}.json
+      - name: Keep only synthetic receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r46-pg-${{ matrix.postgres }}-synthetic
+          path: artifacts/r46-pg-${{ matrix.postgres }}.json
+          retention-days: 7
+          if-no-files-found: ignore

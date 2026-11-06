@@ -30,6 +30,10 @@ const taskInitial='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const now='2026-11-06T00:00:00.000Z';
 const testName='ox_test_factory_r40';
 const r42Secret=randomBytes(32).toString('hex');
+const r46CatalogKey=randomBytes(32).toString('hex');
+const r46OldKey=randomBytes(32).toString('hex');
+const r46NewKey=randomBytes(32).toString('hex');
+let r46NextKeyActive=false;
 function check(ok,message) {if(!ok)throw Error(message);}
 function guard(){
   check(process.argv.includes('--confirm-synthetic') && process.env.OX_R40_EPHEMERAL==='YES',
@@ -57,7 +61,16 @@ async function launchFactory(dataDir,bundle,keyPath,pgUser,pgPass){
      OX_R42_PG_RECONCILIATION:'YES',OX_R42_JOURNAL_HMAC_KEY:r42Secret,
     ...(process.env.OX_R43_E2E==='YES'?{OX_R43_SHADOW_REPLAY:'YES',OX_R43_CONFIRM_SYNTHETIC:'YES'}:{}),
     ...(process.env.OX_R44_E2E==='YES'?{OX_R44_CRITICAL_PARITY:'YES',OX_R44_CONFIRM_SYNTHETIC:'YES'}:{}),
-    ...(process.env.OX_R45_E2E==='YES'?{OX_R45_BACKUP_DRILL:'YES',OX_R45_CONFIRM_SYNTHETIC:'YES'}:{})};
+    ...(process.env.OX_R45_E2E==='YES'?{OX_R45_BACKUP_DRILL:'YES',OX_R45_CONFIRM_SYNTHETIC:'YES'}:{}),
+    ...(process.env.OX_R46_E2E==='YES'?{
+      OX_R46_VAULT:'YES',OX_R46_CONFIRM_SYNTHETIC:'YES',
+      OX_R46_CATALOG_KEY_HEX:r46CatalogKey,OX_R46_RETENTION_COUNT:'2',
+      OX_R46_ACTIVE_KEY_ID:r46NextKeyActive?'key_two':'key_one',
+      OX_R46_ACTIVE_KEY_HEX:r46NextKeyActive?r46NewKey:r46OldKey,
+      ...(r46NextKeyActive?{
+        OX_R46_PREVIOUS_KEY_ID:'key_one',OX_R46_PREVIOUS_KEY_HEX:r46OldKey
+      }:{})
+    }:{})};
   const server=spawn(process.execPath,['server.mjs'],{cwd:new URL('../',import.meta.url),env,stdio:['ignore','pipe','pipe']});
   let tail='';let closed=false;
   server.stderr.on('data',b=>{tail=(tail+b.toString('utf8')).slice(-600);});
@@ -181,7 +194,8 @@ async function main(){
     const reqA=authRequest(live.url,sA.token,sA.csrf),reqB=authRequest(live.url,sB.token,sB.csrf);
     const pathA='/api/studio/pg-preview/projects/'+projectA+'/clients';
     const pathB='/api/studio/pg-preview/projects/'+projectB+'/clients';
-    let checks=0;const requireStatus=(r,expected,label)=>{check(r.status===expected,`${label}: HTTP ${r.status}`);checks++;};
+    let checks=0,vaultSurvivorId;
+    const requireStatus=(r,expected,label)=>{check(r.status===expected,`${label}: HTTP ${r.status}`);checks++;};
     requireStatus(await reqA('/api/studio/pg-preview/status'),200,'Preview status');
     const reconcilePath='/api/studio/pg-preview/projects/'+projectA+'/reconcile';
     const pristine=await reqA(reconcilePath+'/check','POST');
@@ -218,6 +232,39 @@ async function main(){
           unchanged.prepare('SELECT count(*) AS n FROM clients').get().n===1,
           'R4.5 unexpectedly modified live primary');checks++;
       }finally{unchanged.close();}
+    }
+    if(process.env.OX_R46_E2E==='YES'){
+      const vault='/api/studio/pg-preview/projects/'+projectA+'/backup-vault';
+      const copies=[];
+      for(let n=0;n<3;n++){
+        const result=await reqA(vault+'/create','POST');
+        requireStatus(result,200,'R4.6 create retained encrypted archive '+n);
+        check(result.data.result?.archiveRetained===true&&
+          result.data.result?.restoredIntegrityVerified===true&&
+          result.data.result?.sourcePrimaryModified===false&&
+          result.data.result?.productionCutoverAllowed===false,
+          'R4.6 newly retained backup failed signed restore gate');checks++;
+        copies.push(result.data.result.archive.id);
+      }
+      const listing=await reqA(vault+'/list');
+      requireStatus(listing,200,'R4.6 authenticated persisted vault catalog');
+      check(listing.data.index.activeCount===3&&listing.data.index.catalogVerified===true,
+        'R4.6 encrypted archive catalog lost data');checks++;
+      const verified=await reqA(vault+'/verify/'+copies[2],'POST');
+      requireStatus(verified,200,'R4.6 restore latest retained signed archive');
+      check(verified.data.result.verified===true&&verified.data.result.payments>=1,
+        'R4.6 archived synthetic financial records unavailable');checks++;
+      requireStatus(await reqB(vault+'/create','POST'),404,'R4.6 cross-owner archive creation forbidden');
+      requireStatus(await reqA(vault+'/create','GET'),405,'R4.6 GET cannot persist an archive');
+      requireStatus(await reqA(vault+'/create','POST',undefined,'bad-csrf'),403,'R4.6 CSRF archive denial');
+      const cleaned=await reqA(vault+'/prune','POST');
+      requireStatus(cleaned,200,'R4.6 verified retention prunes oldest');
+      check(cleaned.data.result.removed.length===1&&
+        cleaned.data.result.allActiveVerifiedBeforeRetirement===true,
+        'R4.6 retention did not verify archives before retirement');checks++;
+      const gone=await reqA(vault+'/verify/'+copies[0],'POST');
+      requireStatus(gone,409,'R4.6 retired archives cannot be restored');
+      vaultSurvivorId=copies[2];
     }
     const firstA=await reqA(pathA);requireStatus(firstA,200,'Owner A read');
     check(firstA.data.clients.length===1 && firstA.data.clients[0].fullName==='Original A','Owner A sees only own imported rows');checks++;
@@ -330,9 +377,30 @@ async function main(){
     check(goodBatch.data.visits.length===2,'Successful batch count mismatch');checks++;
     // Restart the actual HTTP server while keeping PG committed records.
     await stopFactory(server);server=null;
+    if(process.env.OX_R46_E2E==='YES')r46NextKeyActive=true;
     const restarted=await launchFactory(dataDir,bundle,keys.publicKey,pgUser,password);
     server=restarted.server;
     const afterRestart=authRequest(restarted.url,sA.token,sA.csrf);
+    if(process.env.OX_R46_E2E==='YES'){
+      const vault='/api/studio/pg-preview/projects/'+projectA+'/backup-vault';
+      const persisted=await afterRestart(vault+'/list');
+      requireStatus(persisted,200,'R4.6 encrypted archive survives process restart');
+      check(persisted.data.index.activeCount===2,'R4.6 vault not durable after restart');checks++;
+      const historical=await afterRestart(vault+'/verify/'+vaultSurvivorId,'POST');
+      requireStatus(historical,200,'R4.6 old encryption key restored after restart');
+      const rotated=await afterRestart(vault+'/rotate/'+vaultSurvivorId,'POST');
+      requireStatus(rotated,200,'R4.6 key rotation creates second encrypted copy');
+      check(rotated.data.result.rotationVerified===true&&rotated.data.result.oldArchiveRetained===true&&
+        rotated.data.result.archive.keyId==='key_two','R4.6 key rotation verification failed');checks++;
+      const newId=rotated.data.result.archive.id;
+      const rotatedCheck=await afterRestart(vault+'/verify/'+newId,'POST');
+      requireStatus(rotatedCheck,200,'R4.6 restored archive after key rotation');
+      check(rotatedCheck.data.result.financialHmac===historical.data.result.financialHmac,
+        'R4.6 rotation altered the financial ledger');checks++;
+      const retention=await afterRestart(vault+'/prune','POST');
+      requireStatus(retention,200,'R4.6 post-rotation retention');
+      check(retention.data.result.retained===2,'R4.6 retention failed after rotation');checks++;
+    }
     const afterTasks=await afterRestart(tasksA),afterVisits=await afterRestart(visitsA);
     requireStatus(afterTasks,200,'Task persists after server restart');
     requireStatus(afterVisits,200,'Visits persist after server restart');
@@ -410,6 +478,7 @@ async function main(){
       r43ShadowReplayVerified:process.env.OX_R43_E2E==='YES',
       r44CriticalParityVerified:process.env.OX_R44_E2E==='YES',
       r45EncryptedRestoreVerified:process.env.OX_R45_E2E==='YES',
+      r46RetainedEncryptedVaultVerified:process.env.OX_R46_E2E==='YES',
       privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));
