@@ -1,0 +1,43 @@
+# Deploy on independent audit-host machine, never on S3/witness VPS.
+services:
+  anchor:
+    build:
+      context: ../..
+      dockerfile: ops/r51/Dockerfile.anchor
+    restart: unless-stopped
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=8m,noexec,nosuid"]
+    secrets: [anchor_token,anchor_key]
+    environment:
+      OX_R51_ANCHOR_TOKEN_FILE: /run/secrets/anchor_token
+      OX_R51_ANCHOR_HMAC_FILE: /run/secrets/anchor_key
+    volumes: ["anchor_state:/state"]
+    expose: ["9081"]
+    networks: [private]
+  tls:
+    image: caddy:2.9-alpine
+    restart: unless-stopped
+    depends_on: [anchor]
+    ports: ["80:80", "443:443"]
+    environment:
+      OX_R51_ANCHOR_DOMAIN: ${OX_R51_ANCHOR_DOMAIN:?set independent audit hostname}
+    volumes:
+      - ./Caddyfile.anchor:/etc/caddy/Caddyfile:ro
+      - tls_data:/data
+      - tls_config:/config
+    networks: [private,public]
+secrets:
+  anchor_token:
+    file: ${OX_R51_ANCHOR_TOKEN_FILE:?set external token-file path}
+  anchor_key:
+    file: ${OX_R51_ANCHOR_HMAC_FILE:?set external key-file path}
+volumes:
+  anchor_state:
+  tls_data:
+  tls_config:
+networks:
+  private:
+    internal: true
+  public:
