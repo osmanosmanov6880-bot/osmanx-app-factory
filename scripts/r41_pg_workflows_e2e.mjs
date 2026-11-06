@@ -646,8 +646,11 @@ async function main(){
       const deletionBody=await denied.text();
       const s3ErrorCode=(deletionBody.match(/<Code>([A-Za-z0-9_]+)<\/Code>/)||[])[1]||'none';
       const s3ErrorMessage=(deletionBody.match(/<Message>([^<]{0,240})<\/Message>/)||[])[1]||'none';
-      check([403,409].includes(denied.status)&&
-        /AccessDenied|ObjectLocked|WORM|retention/i.test(deletionBody)&&
+      const explicitWormDenial=([403,409].includes(denied.status)&&
+        /AccessDenied|ObjectLocked|WORM|retention/i.test(deletionBody))||
+        (denied.status===400&&s3ErrorCode==='InvalidRequest'&&
+          /^Object is WORM protected and cannot be overwritten/.test(s3ErrorMessage));
+      check(explicitWormDenial&&
         !/SignatureDoesNotMatch|InvalidAccessKeyId|AuthorizationHeaderMalformed/i.test(deletionBody),
         'R4.9 exact-version delete denied incorrectly (HTTP '+denied.status+
           ', S3 code '+s3ErrorCode+', message '+s3ErrorMessage+')');checks++;
