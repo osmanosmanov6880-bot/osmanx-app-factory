@@ -41,6 +41,27 @@ test('R44 blocks orphan automation task',()=>{
  const f=setup();try{f.db.prepare('UPDATE automation_runs SET task_id=?').run('99999999-9999-4999-8999-999999999999');
  assert.throws(()=>assessR44CriticalParity(f.db,f.capture(),{secret:k}),/missing task/);}finally{f.db.close();}
 });
+test('R44 rejects zero or negative payment amounts even when both engines match',()=>{
+ const f=setup();try{
+   f.db.prepare('UPDATE payments SET amount_minor=?').run(0);
+   assert.throws(()=>assessR44CriticalParity(f.db,f.capture(),{secret:k}),/invalid payment amount/);
+ }finally{f.db.close();}
+});
+test('R44 rejects unknown custom-entity automation targets',()=>{
+ const f=setup();try{
+   f.db.prepare('UPDATE automations SET entity_slug=?').run('unknown');
+   assert.throws(()=>assessR44CriticalParity(f.db,f.capture(),{secret:k}),/missing custom entity/);
+ }finally{f.db.close();}
+});
+test('R44 rejects a missing custom table or invalid select option',()=>{
+ const f=setup();try{
+   const missing=f.capture().filter(x=>x.table.name!=='custom_orders');
+   assert.throws(()=>assessR44CriticalParity(f.db,missing,{secret:k}),/custom table missing/);
+   const def={slug:'orders',fields:[{key:'ticket',type:'select',options:['Accepted'],required:true}]};
+   f.db.prepare('UPDATE custom_entity_schema SET definition_json=?').run(JSON.stringify(def));
+   assert.throws(()=>assessR44CriticalParity(f.db,f.capture(),{secret:k}),/invalid custom select value/);
+ }finally{f.db.close();}
+});
 test('R44 requires explicit synthetic opt-in',()=>{
  const env={OX_R43_SHADOW_REPLAY:'YES',OX_R43_CONFIRM_SYNTHETIC:'YES',OX_R42_PG_RECONCILIATION:'YES',OX_R40_PG_PREVIEW:'YES',OX_R42_JOURNAL_HMAC_KEY:k.toString('hex'),OX_R40_PG_BUNDLE:'/bundle',OX_R40_PG_TRUST_KEY:'/key',OX_R44_CRITICAL_PARITY:'YES'};
  assert.throws(()=>validateR43Options(env),/explicit synthetic fixture opt-in/);
