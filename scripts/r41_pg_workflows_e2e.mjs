@@ -54,7 +54,8 @@ async function launchFactory(dataDir,bundle,keyPath,pgUser,pgPass){
   const env={...process.env,DATA_DIR:dataDir,PORT:String(port),HOST:'127.0.0.1',
     PGUSER:pgUser,PGPASSWORD:pgPass, OX_R40_PG_PREVIEW:'YES',
     OX_R40_PG_BUNDLE:bundle,OX_R40_PG_TRUST_KEY:keyPath,OX_R40_EPHEMERAL:'YES',
-     OX_R42_PG_RECONCILIATION:'YES',OX_R42_JOURNAL_HMAC_KEY:r42Secret};
+     OX_R42_PG_RECONCILIATION:'YES',OX_R42_JOURNAL_HMAC_KEY:r42Secret,
+    ...(process.env.OX_R43_E2E==='YES'?{OX_R43_SHADOW_REPLAY:'YES',OX_R43_CONFIRM_SYNTHETIC:'YES'}:{})};
   const server=spawn(process.execPath,['server.mjs'],{cwd:new URL('../',import.meta.url),env,stdio:['ignore','pipe','pipe']});
   let tail='';let closed=false;
   server.stderr.on('data',b=>{tail=(tail+b.toString('utf8')).slice(-600);});
@@ -291,7 +292,39 @@ async function main(){
     check(auditCheck.rows.length>=10&&auditCheck.rows.every(x=>x.action.startsWith('pg-preview.'))&&
       ['clients','tasks','visits'].every(x=>auditCheck.rows.some(r=>r.entity===x)),
       'R4.2 atomic mutation audit incomplete');checks++;
-    const receipt={format:'osmanx-r42-real-pg-crm-reconciliation',success:true,syntheticOnly:true,
+    if(process.env.OX_R43_E2E==='YES'){
+      const shadowPath='/api/studio/pg-preview/projects/'+projectA+'/shadow-replay';
+      const first=await afterRestart(shadowPath+'/check','POST');
+      requireStatus(first,200,'R4.3 PG-to-ephemeral shadow replay');
+      check(first.data.receipt.shadowAligned===true&&first.data.receipt.primarySqliteModified===false
+        &&first.data.receipt.firstPass.inserted>0&&first.data.receipt.idempotentRetryVerified===true
+        &&first.data.receipt.productionCutoverAllowed===false,'R4.3 signed shadow replay validation failed');checks++;
+      const repeated=await afterRestart(shadowPath+'/check','POST');
+      requireStatus(repeated,200,'R4.3 same-checkpoint retry');
+      check(repeated.data.checkpoint.deduplicated===true&&repeated.data.checkpoint.sequence===1,
+        'R4.3 shadow checkpoint duplicate not suppressed');checks++;
+      const ownersOther=authRequest(restarted.url,sB.token,sB.csrf);
+      requireStatus(await ownersOther(shadowPath+'/check','POST'),404,'R4.3 different owner denied');
+      const checkpoints=await afterRestart(shadowPath+'/history');
+      requireStatus(checkpoints,200,'R4.3 verifies checkpoint HMAC');
+      check(checkpoints.data.entries===1&&checkpoints.data.history[0].idempotentRetryVerified===true,
+        'R4.3 checkpoint history incorrect');checks++;
+      const unchangedPrimary=crmDb(join(dataDir,'projects',projectA+'.sqlite'));
+      try{
+        check(unchangedPrimary.prepare('SELECT full_name FROM clients WHERE id=?').get(existingA).full_name==='Original A'
+          &&unchangedPrimary.prepare('SELECT count(*) AS n FROM visits').get().n===0,
+          'R4.3 wrote to live SQLite source');
+      }finally{unchangedPrimary.close();}checks++;
+      // Direct PG mutation with no pg-preview audit must fail closed.
+      await adminPool.query('UPDATE "ox_p_'+projectA.replaceAll('-','')+
+        '".clients SET full_name=$1 WHERE id=$2',['Unlogged tampering',existingA]);
+      const unlogged=await afterRestart(shadowPath+'/check','POST');
+      requireStatus(unlogged,409,'R4.3 unlogged PG write refused');
+      const historyAfter=await afterRestart(shadowPath+'/history');
+      requireStatus(historyAfter,200,'R4.3 journal unchanged after rejected direct write');
+      check(historyAfter.data.entries===1,'R4.3 failure created a misleading checkpoint');checks++;
+    }
+    const receipt={format:process.env.OX_R43_E2E==='YES'?'osmanx-r43-real-pg-shadow-acceptance':'osmanx-r42-real-pg-crm-reconciliation',success:true,syntheticOnly:true,
       pgVersionNum:version,realPostgres:true,realHttp:true,signedManifestVerified:true,
       tenantSchemas:2,rolesWithLeastPrivilege:true,forbiddenCrossTenantRequests:3,
       csrfDenied:true,transactionRollbackVerified:true,sourceSqliteUnchanged:true,
@@ -299,6 +332,7 @@ async function main(){
       optimisticConcurrencyVerified:true,visitBatchRollbackVerified:true,httpRestartPersistenceVerified:true,
       postgresRuntimeEnabled:true,sqlitePrimaryRuntime:true,productionCutoverApproved:false,
       initialDriftZero:true,subsequentDriftDetected:true,ownerReconciliationProtected:true,
+      r43ShadowReplayVerified:process.env.OX_R43_E2E==='YES',
       privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));

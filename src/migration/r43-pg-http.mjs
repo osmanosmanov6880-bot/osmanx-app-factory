@@ -36,9 +36,16 @@ export async function handleR43Request(req,res,{studioDb,runtime,dataDir,options
   if(inProgress.has(projectId))bad(409,'Сверка проекта уже выполняется');
   inProgress.add(projectId);
   try{
-    const receipt=await runR43ShadowReplay({sqlitePath:join(dataDir,'projects',projectId+'.sqlite'),
-      adapter:runtime.adapter,bundleDir:options.bundleDir,trustedPublicKey:options.trustedPublicKey,
-      actorId:owner.id,projectId,secret:options.secret});
+    let receipt;
+    try{
+      receipt=await runR43ShadowReplay({sqlitePath:join(dataDir,'projects',projectId+'.sqlite'),
+        adapter:runtime.adapter,bundleDir:options.bundleDir,trustedPublicKey:options.trustedPublicKey,
+        actorId:owner.id,projectId,secret:options.secret});
+    }catch(error){
+      if(String(error.message||'').startsWith('R4.3 shadow replay denied:'))
+        bad(409,'Несанкционированное расхождение PostgreSQL, перенос остановлен');
+      throw error;
+    }
     const checkpoint=await appendR43Checkpoint({directory:historyDir,secret:options.secret,receipt});
     return ok(res,{projectId,receipt,checkpoint,
       verdict:'shadow-replay-verified-only',productionCutoverAllowed:false});
