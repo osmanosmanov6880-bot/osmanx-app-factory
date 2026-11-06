@@ -9,6 +9,7 @@ import {join} from 'node:path';
 import {quoteIdent} from './pg-kit.mjs';
 import {verifyTrustedMigration} from './pg-trust.mjs';
 import {r43AfterImageHmac,r43AuditVersion} from './r42-pg-audit.mjs';
+import {assessR44CriticalParity} from './r44-critical-parity.mjs';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MUTABLE=new Set(['clients','tasks','visits']);
@@ -280,7 +281,7 @@ function fingerprint(captures,secret){
 // tenant REPEATABLE READ snapshot, replays only audited Preview mutations,
 // verifies all tables and repeats idempotently, then deletes sensitive shadow.
 export async function runR43ShadowReplay({
-  sqlitePath,adapter,bundleDir,trustedPublicKey,actorId,projectId,secret,maxRowsPerTable=5000
+  sqlitePath,adapter,bundleDir,trustedPublicKey,actorId,projectId,secret,maxRowsPerTable=5000,criticalParityGate=false
 }={}){
   ensure(typeof projectId==='string'&&UUID.test(projectId),'invalid project ID');
   ensure(typeof actorId==='string'&&actorId.length>0,'actor ID required');
@@ -306,6 +307,7 @@ export async function runR43ShadowReplay({
     db.exec('PRAGMA foreign_keys=ON');
     baselineCheck(db,entry,maxRowsPerTable);
     const captures=await capturePgSnapshot(adapter,actorId,projectId,entry,maxRowsPerTable);
+    const criticalParity=criticalParityGate?assessR44CriticalParity(db,captures,{secret}):null;
     const initial=applyR43ShadowPatch(db,captures,{secret});
     const retry=applyR43ShadowPatch(db,captures,{secret});
     ensure(retry.inserted===0&&retry.updated===0,'shadow replay is not idempotent');
@@ -317,6 +319,7 @@ export async function runR43ShadowReplay({
       firstPass:{inserted:initial.inserted,updated:initial.updated,auditEventCount:initial.auditEventCount},
       idempotentRetryVerified:true,retryPass:{inserted:retry.inserted,updated:retry.updated},
       tableCount:captures.length,shadowAligned:true,
+      ...(criticalParity?{criticalParity,criticalParityVerified:true}:{}),
       checkpointHmac:fingerprint(captures,secret),
       shadowDestroyedOnExit:true,primarySqliteModified:false,productionCutoverAllowed:false};
   }finally{

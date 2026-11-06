@@ -1,0 +1,82 @@
+name: R4.4 PostgreSQL 15 16 critical financial workflow parity
+on:
+  push:
+    branches: ['feat/r44-finance-workflow-parity', main]
+    paths:
+      - 'src/migration/**'
+      - 'scripts/r41_pg_workflows_e2e.mjs'
+      - 'tests/r44_critical_parity.test.mjs'
+      - 'package.json'
+      - '.github/workflows/r44-pg-critical-parity.yml'
+  pull_request:
+    paths: ['src/migration/**', 'scripts/r41_pg_workflows_e2e.mjs', 'tests/r44_critical_parity.test.mjs', 'package.json']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: r44-parity-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  critical-parity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15', '16']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r44-synthetic-only
+          POSTGRES_DB: ox_test_factory_r40
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_test_factory_r40"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r44-synthetic-only
+      PGDATABASE: ox_test_factory_r40
+      PGSSLMODE: disable
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R43_E2E: 'YES'
+      OX_R44_E2E: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned driver
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: PostgreSQL client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE"
+      - name: R4.4 critical integrity and precursor tests
+        run: |
+          npm run test:r44
+          npm run test:r43
+          npm run test:r42
+          npm run test:r41
+          npm run test:r40
+          node --check src/migration/r44-critical-parity.mjs
+          node --check scripts/r41_pg_workflows_e2e.mjs
+      - name: Full signed PostgreSQL financial workflow custom-entity acceptance
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          node scripts/r41_pg_workflows_e2e.mjs --confirm-synthetic | tee artifacts/r44-pg-${{ matrix.postgres }}.json
+      - name: Keep synthetic-only receipts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r44-pg-${{ matrix.postgres }}-synthetic
+          path: artifacts/r44-pg-${{ matrix.postgres }}.json
+          retention-days: 7
+          if-no-files-found: ignore

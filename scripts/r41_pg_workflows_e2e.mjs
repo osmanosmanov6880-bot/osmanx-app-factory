@@ -55,7 +55,8 @@ async function launchFactory(dataDir,bundle,keyPath,pgUser,pgPass){
     PGUSER:pgUser,PGPASSWORD:pgPass, OX_R40_PG_PREVIEW:'YES',
     OX_R40_PG_BUNDLE:bundle,OX_R40_PG_TRUST_KEY:keyPath,OX_R40_EPHEMERAL:'YES',
      OX_R42_PG_RECONCILIATION:'YES',OX_R42_JOURNAL_HMAC_KEY:r42Secret,
-    ...(process.env.OX_R43_E2E==='YES'?{OX_R43_SHADOW_REPLAY:'YES',OX_R43_CONFIRM_SYNTHETIC:'YES'}:{})};
+    ...(process.env.OX_R43_E2E==='YES'?{OX_R43_SHADOW_REPLAY:'YES',OX_R43_CONFIRM_SYNTHETIC:'YES'}:{}),
+    ...(process.env.OX_R44_E2E==='YES'?{OX_R44_CRITICAL_PARITY:'YES',OX_R44_CONFIRM_SYNTHETIC:'YES'}:{})};
   const server=spawn(process.execPath,['server.mjs'],{cwd:new URL('../',import.meta.url),env,stdio:['ignore','pipe','pipe']});
   let tail='';let closed=false;
   server.stderr.on('data',b=>{tail=(tail+b.toString('utf8')).slice(-600);});
@@ -96,7 +97,13 @@ function insertStudioFixtures(studio){
   return [issueSession(studio,ownerA),issueSession(studio,ownerB)];
 }
 function seedCrm(path,clientId,person,{staff=false}={}){
-  const db=crmDb(path);
+  const r44=staff&&process.env.OX_R44_E2E==='YES';
+  const customDefinitions=r44?[{
+    slug:'orders',title:'Synthetic orders',description:'',access:{
+      read:['admin','manager','staff'],write:['admin','manager']},
+    fields:[{key:'ticket',label:'Ticket',type:'text',required:false}]
+  }]:[];
+  const db=crmDb(path,customDefinitions);
   try{
     db.prepare('INSERT INTO clients(id,full_name,phone,email,source,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)')
       .run(clientId,person,'','','walkin','',now,now);
@@ -107,6 +114,25 @@ function seedCrm(path,clientId,person,{staff=false}={}){
     }
     db.prepare(`INSERT INTO tasks(id,title,description,status,priority,due_at,client_id,assigned_to,created_by,created_at,updated_at)
       VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(taskInitial,'Imported assigned task','','todo','medium',null,clientId,staffA,managerA,now,now);
+    if(r44){
+      const paymentId='dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+      const ruleId='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+      db.prepare(`INSERT INTO payments(id,client_id,amount_minor,currency,method,status,
+        external_reference,note,idem_key,request_fingerprint,created_by,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(paymentId,clientId,12500,'RUB','terminal','paid','','Synthetic invoice',
+          'synthetic-r44-payment','synthetic-only-fingerprint',managerA,now,now);
+      db.prepare(`INSERT INTO automations(id,name,event,task_title,priority,enabled,created_by,
+        created_at,entity_slug,condition_field,condition_value,due_days)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(ruleId,'Notify about order','entity_created','Call client','medium',1,managerA,now,
+          'orders',null,null,0);
+      db.prepare('INSERT INTO automation_runs(id,automation_id,event_key,task_id,created_at) VALUES(?,?,?,?,?)')
+        .run('ffffffff-ffff-4fff-8fff-ffffffffffff',ruleId,'synthetic-r44-event',taskInitial,now);
+      db.prepare(`INSERT INTO custom_orders(id,version,created_at,updated_at,archived_at,
+        created_by,ticket) VALUES(?,?,?,?,?,?,?)`)
+        .run('abababab-abab-4aba-8aba-abababababab',1,now,now,null,managerA,'Test booking');
+    }
     return {staff:issueSession(db,staffA),manager:issueSession(db,managerA)};
   }finally{db.close();}
 }
@@ -305,6 +331,15 @@ async function main(){
       const shadowPath='/api/studio/pg-preview/projects/'+projectA+'/shadow-replay';
       const first=await afterRestart(shadowPath+'/check','POST');
       requireStatus(first,200,'R4.3 PG-to-ephemeral shadow replay');
+      if(process.env.OX_R44_E2E==='YES'){
+        check(first.data.receipt.criticalParity?.ok===true&&
+          first.data.receipt.criticalParity.financial?.records>=1&&
+          first.data.receipt.criticalParity.automations?.rules>=1&&
+          first.data.receipt.criticalParity.automations?.runs>=1&&
+          first.data.receipt.criticalParity.custom?.entities>=1&&
+          first.data.receipt.criticalParity.paymentWritesPermitted===false,
+          'R4.4 critical nonempty financial/workflow/custom-entity gate failed');checks++;
+      }
       check(first.data.receipt.shadowAligned===true&&first.data.receipt.primarySqliteModified===false
         &&first.data.receipt.firstPass.inserted>0&&first.data.receipt.idempotentRetryVerified===true
         &&first.data.receipt.productionCutoverAllowed===false,'R4.3 signed shadow replay validation failed');checks++;
@@ -342,6 +377,7 @@ async function main(){
       postgresRuntimeEnabled:true,sqlitePrimaryRuntime:true,productionCutoverApproved:false,
       initialDriftZero:true,subsequentDriftDetected:true,ownerReconciliationProtected:true,
       r43ShadowReplayVerified:process.env.OX_R43_E2E==='YES',
+      r44CriticalParityVerified:process.env.OX_R44_E2E==='YES',
       privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));

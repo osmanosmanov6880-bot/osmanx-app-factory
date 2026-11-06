@@ -50,19 +50,17 @@ async function fixture(){
   const captures=Object.keys(TABLES).map(name=>({table:TABLES[name],postgresRows:pg[name]}));
   return {folder,db,pg,captures,async close(){db.close();await rm(folder,{recursive:true,force:true});}};
 }
-test('R4.3 rejects malformed six-group audit UUIDs, but accepts valid five-group UUIDs',async()=>{
+test('R4.3 rejects six-group UUIDs and accepts valid audit identifiers',async()=>{
   const f=await fixture();
+  try{assert.equal(applyR43ShadowPatch(f.db,f.captures,{secret}).shadowVerified,true);}
+  finally{await f.close();}
+  const invalid=await fixture();
   try{
-    assert.equal(applyR43ShadowPatch(f.db,f.captures,{secret}).shadowVerified,true);
-  }finally{await f.close();}
-  const malformed=await fixture();
-  try{
-    const captures=malformed.captures.map(c=>c.table.name==='audit_log'
-      ?{...c,postgresRows:c.postgresRows.map((r,i)=>i===0?
+    const captures=invalid.captures.map(c=>c.table.name==='audit_log'?
+      {...c,postgresRows:c.postgresRows.map((r,i)=>i===0?
         {...r,id:'aaaaaaaa-aaaa-4aaa-8aaa-abcd-aaaaaaaaaaaa'}:r)}:c);
-    assert.throws(()=>applyR43ShadowPatch(malformed.db,captures,{secret}),
-      /new audit entry IDs invalid/);
-  }finally{await malformed.close();}
+    assert.throws(()=>applyR43ShadowPatch(invalid.db,captures,{secret}),/new audit entry IDs invalid/);
+  }finally{await invalid.close();}
 });
 test('R4.3 replays only audited mutations and retry is exactly idempotent',async()=>{
   const f=await fixture();

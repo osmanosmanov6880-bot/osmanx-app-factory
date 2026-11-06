@@ -13,7 +13,10 @@ export function validateR43Options(env=process.env){
   if(env.OX_R43_CONFIRM_SYNTHETIC!=='YES')throw Error('R4.3 requires explicit synthetic fixture acknowledgement');
   const r42=validateR42Options(env);
   if(!r42)throw Error('R4.3 requires signed R4.2 reconciliation preview');
-  return Object.freeze({...r42,shadowReplay:true,productionCutoverAllowed:false});
+  const criticalParityGate=env.OX_R44_CRITICAL_PARITY==='YES';
+  if(criticalParityGate&&env.OX_R44_CONFIRM_SYNTHETIC!=='YES')
+    throw Error('R4.4 critical parity requires explicit synthetic fixture opt-in');
+  return Object.freeze({...r42,shadowReplay:true,criticalParityGate,productionCutoverAllowed:false});
 }
 export async function handleR43Request(req,res,{studioDb,runtime,dataDir,options}={}){
   if(!runtime?.adapter||!options?.shadowReplay)bad(404,'R4.3 shadow replay disabled');
@@ -40,7 +43,7 @@ export async function handleR43Request(req,res,{studioDb,runtime,dataDir,options
     try{
       receipt=await runR43ShadowReplay({sqlitePath:join(dataDir,'projects',projectId+'.sqlite'),
         adapter:runtime.adapter,bundleDir:options.bundleDir,trustedPublicKey:options.trustedPublicKey,
-        actorId:owner.id,projectId,secret:options.secret});
+        actorId:owner.id,projectId,secret:options.secret,criticalParityGate:options.criticalParityGate});
     }catch(error){
       if(String(error.message||'').startsWith('R4.3 shadow replay denied:'))
         bad(409,'Несанкционированное расхождение PostgreSQL, перенос остановлен');
