@@ -11,6 +11,7 @@ import { bad, json, respondError, securityHeaders } from './src/common/http.mjs'
 import { sessionFromRequest, assertSafePublicBootstrap } from './src/common/security.mjs';
 import { acquireLock } from './src/common/maintenance.mjs';
 import { createR40Runtime, handleR40PreviewRequest, R40_PREFIX } from './src/migration/r40-pg-http.mjs';
+import {handleR41PreviewRequest} from './src/migration/r41-pg-workflows.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url));
 const data=resolve(process.env.DATA_DIR || resolve(root,'data'));
@@ -30,6 +31,8 @@ const server=createServer(async(req,res)=>{
     securityHeaders(res);
     const url=new URL(req.url,'http://localhost');
     if(url.pathname==='/api/health') return json(res,{ok:true,service:'osmanx-app-factory',version:'1.3.0'});
+    if(/^\/api\/studio\/pg-preview\/projects\/[0-9a-f-]{36}\/(tasks|visits)(\/|$)/.test(url.pathname))
+      return await handleR41PreviewRequest(req,res,{studioDb:db,runtime:pgPreview});
     if(url.pathname.startsWith(R40_PREFIX + '/')) return await handleR40PreviewRequest(req,res,{studioDb:db,runtime:pgPreview});
     const match=url.pathname.match(/^\/workspace\/([0-9a-f-]{36})(\/.*|$)/);
     if(match) {
@@ -51,6 +54,8 @@ const server=createServer(async(req,res)=>{
           base:`/workspace/${project.id}`,staticRoot:resolve(root,'public/site'),cookieName:'ox_site'});
       }
       if(!crmCache.has(project.id)) crmCache.set(project.id,crmDb(resolve(data,'projects',`${project.id}.sqlite`),project.entities,project.automationPresets||[],project.modules));
+      if(url.pathname.startsWith(`/workspace/${project.id}/api/pg-preview/`))
+        return await handleR41PreviewRequest(req,res,{studioDb:db,runtime:pgPreview,crmDb:crmCache.get(project.id),workspaceProjectId:project.id});
       return await handleCrmRequest(req,res,{db:crmCache.get(project.id),config:project,
         base:`/workspace/${project.id}`,staticRoot:resolve(root,'public/crm'),cookieName:'ox_crm'});
     }

@@ -1,5 +1,8 @@
 # OSMANX APP FACTORY R4.0 — PostgreSQL HTTP Preview (opt-in)
 
+> **R4.1 Preview:** PostgreSQL-задачи и визиты CRM через защищённые маршруты владельца (`ox_studio`) и сотрудников (`ox_crm`). Проверка связей с клиентами, лимиты доступа, CAS-защита конкурентных изменений, атомарный пакет визитов, отдельная GitHub Actions матрица PostgreSQL 15/16. SQLite остаётся основной. См. [`docs/RELEASE_R41_POSTGRES_CRM_WORKFLOWS.md`](docs/RELEASE_R41_POSTGRES_CRM_WORKFLOWS.md).
+
+
 > **R4.0 adds a real PostgreSQL-backed HTTP API ONLY for synthetic test deployments.** The factory, CMS and deployed CRM still run on SQLite. There is NO live customer migration, NO production cutover, NO public HTTPS certification. The PG Preview does not read or change the current SQLite CRM data; it uses a separately signed migration of a test copy.
 
 - Protected API: `GET /api/studio/pg-preview/status`; `GET /api/studio/pg-preview/projects/:uuid/clients?limit=25`; `GET /.../clients/:uuid`; `POST /.../clients`; `PATCH /.../clients/:uuid`; `POST /.../clients/batch` (1–10 clients, atomic).

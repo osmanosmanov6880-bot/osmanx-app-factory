@@ -1,0 +1,86 @@
+name: R4.1 isolated PostgreSQL CRM tasks visits and concurrency acceptance
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/migration/r41-pg-workflows.mjs'
+      - 'src/migration/r40-pg-http.mjs'
+      - 'src/migration/pg-tenant-adapter.mjs'
+      - 'server.mjs'
+      - 'scripts/r41_pg_workflows_e2e.mjs'
+      - 'tests/r41_pg_workflows.test.mjs'
+      - '.github/workflows/r41-postgres-crm-workflows.yml'
+      - 'package.json'
+  pull_request:
+    paths:
+      - 'src/migration/**'
+      - 'server.mjs'
+      - 'scripts/r41_pg_workflows_e2e.mjs'
+      - 'tests/r41_pg_workflows.test.mjs'
+      - '.github/workflows/r41-postgres-crm-workflows.yml'
+      - 'package.json'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: r41-crm-pg-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  postgres-crm-workflows:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15', '16']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r41-synthetic-only-ci-password
+          POSTGRES_DB: ox_test_factory_r40
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_test_factory_r40"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r41-synthetic-only-ci-password
+      PGDATABASE: ox_test_factory_r40
+      PGSSLMODE: disable
+      OX_R40_EPHEMERAL: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned PostgreSQL driver
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE"
+      - name: Validate preview auth, safe SQL and concurrency tests
+        run: |
+          npm run test:r41
+          node --check server.mjs
+          node --check scripts/r41_pg_workflows_e2e.mjs
+      - name: Real PostgreSQL workflow HTTP test with signed import and process restart
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          node scripts/r41_pg_workflows_e2e.mjs --confirm-synthetic | tee artifacts/r41-pg-${{ matrix.postgres }}.json
+      - name: Store synthetic-only acceptance receipt
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r41-pg-${{ matrix.postgres }}-crm-receipt
+          path: artifacts/r41-pg-${{ matrix.postgres }}.json
+          if-no-files-found: ignore
+          retention-days: 7
