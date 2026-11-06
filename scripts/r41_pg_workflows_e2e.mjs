@@ -29,6 +29,7 @@ const managerA='99999999-9999-4999-8999-999999999999';
 const taskInitial='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const now='2026-11-06T00:00:00.000Z';
 const testName='ox_test_factory_r40';
+const r42Secret=randomBytes(32).toString('hex');
 function check(ok,message) {if(!ok)throw Error(message);}
 function guard(){
   check(process.argv.includes('--confirm-synthetic') && process.env.OX_R40_EPHEMERAL==='YES',
@@ -52,7 +53,8 @@ async function launchFactory(dataDir,bundle,keyPath,pgUser,pgPass){
   const port=await freePort();
   const env={...process.env,DATA_DIR:dataDir,PORT:String(port),HOST:'127.0.0.1',
     PGUSER:pgUser,PGPASSWORD:pgPass, OX_R40_PG_PREVIEW:'YES',
-    OX_R40_PG_BUNDLE:bundle,OX_R40_PG_TRUST_KEY:keyPath,OX_R40_EPHEMERAL:'YES'};
+    OX_R40_PG_BUNDLE:bundle,OX_R40_PG_TRUST_KEY:keyPath,OX_R40_EPHEMERAL:'YES',
+     OX_R42_PG_RECONCILIATION:'YES',OX_R42_JOURNAL_HMAC_KEY:r42Secret};
   const server=spawn(process.execPath,['server.mjs'],{cwd:new URL('../',import.meta.url),env,stdio:['ignore','pipe','pipe']});
   let tail='';let closed=false;
   server.stderr.on('data',b=>{tail=(tail+b.toString('utf8')).slice(-600);});
@@ -153,6 +155,12 @@ async function main(){
     const pathB='/api/studio/pg-preview/projects/'+projectB+'/clients';
     let checks=0;const requireStatus=(r,expected,label)=>{check(r.status===expected,`${label}: HTTP ${r.status}`);checks++;};
     requireStatus(await reqA('/api/studio/pg-preview/status'),200,'Preview status');
+    const reconcilePath='/api/studio/pg-preview/projects/'+projectA+'/reconcile';
+    const pristine=await reqA(reconcilePath+'/check','POST');
+    requireStatus(pristine,200,'R4.2 pristine signed import');
+    check(pristine.data.report.ok===true&&pristine.data.report.totalDifferences===0&&
+      pristine.data.readiness.productionCutoverAllowed===false,'Initial signed reconciliation mismatch');checks++;
+    requireStatus(await reqB(reconcilePath+'/check','POST'),404,'R4.2 foreign owner denied');
     const firstA=await reqA(pathA);requireStatus(firstA,200,'Owner A read');
     check(firstA.data.clients.length===1 && firstA.data.clients[0].fullName==='Original A','Owner A sees only own imported rows');checks++;
     const firstB=await reqB(pathB);requireStatus(firstB,200,'Owner B read');
@@ -271,13 +279,27 @@ async function main(){
     }finally{sourceDb.close();}checks++;
     const pgVisits=await adminPool.query(`SELECT count(*)::int AS n FROM "ox_p_${projectA.replaceAll('-','')}".visits`);
     check(pgVisits.rows[0].n===4,'PostgreSQL visit commits/rollback count wrong');checks++;
-    const receipt={format:'osmanx-r41-real-pg-crm-acceptance',success:true,syntheticOnly:true,
+    const drift=await afterRestart(reconcilePath+'/check','POST');
+    requireStatus(drift,200,'R4.2 detects PostgreSQL-only changes');
+    check(drift.data.report.ok===false&&drift.data.report.totalDifferences>0&&
+      drift.data.readiness.productionCutoverAllowed===false,'R4.2 drift gate failed');checks++;
+    const history=await afterRestart(reconcilePath+'/history');
+    requireStatus(history,200,'R4.2 HMAC journal verified');
+    check(history.data.entries===2&&history.data.history[0].ok===true&&history.data.history[1].ok===false,
+      'R4.2 journal chain failed');checks++;
+    const auditCheck=await adminPool.query('SELECT action,entity FROM "ox_p_'+projectA.replaceAll('-','')+'".audit_log');
+    check(auditCheck.rows.length>=10&&auditCheck.rows.every(x=>x.action.startsWith('pg-preview.'))&&
+      ['clients','tasks','visits'].every(x=>auditCheck.rows.some(r=>r.entity===x)),
+      'R4.2 atomic mutation audit incomplete');checks++;
+    const receipt={format:'osmanx-r42-real-pg-crm-reconciliation',success:true,syntheticOnly:true,
       pgVersionNum:version,realPostgres:true,realHttp:true,signedManifestVerified:true,
       tenantSchemas:2,rolesWithLeastPrivilege:true,forbiddenCrossTenantRequests:3,
       csrfDenied:true,transactionRollbackVerified:true,sourceSqliteUnchanged:true,
       checks,crmOperations:['clients','tasks','visits'],employeeSessionsVerified:true,
       optimisticConcurrencyVerified:true,visitBatchRollbackVerified:true,httpRestartPersistenceVerified:true,
       postgresRuntimeEnabled:true,sqlitePrimaryRuntime:true,productionCutoverApproved:false,
+      initialDriftZero:true,subsequentDriftDetected:true,ownerReconciliationProtected:true,
+      privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));
   }finally{

@@ -1,0 +1,53 @@
+name: R4.2 PostgreSQL 15 16 reconciliation and audit acceptance
+on:
+  push:
+    branches: [main, 'feat/r42-sqlite-postgres-drift-gates']
+    paths:
+      - 'src/migration/**'
+      - 'server.mjs'
+      - 'scripts/r41_pg_workflows_e2e.mjs'
+      - 'tests/r42_pg_reconciliation.test.mjs'
+      - '.github/workflows/r42-pg-reconciliation.yml'
+      - 'package.json'
+  pull_request:
+    paths: ['src/migration/**', 'server.mjs', 'scripts/r41_pg_workflows_e2e.mjs', 'tests/r42_pg_reconciliation.test.mjs', 'package.json']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  postgres:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ['15','16']
+    services:
+      postgres:
+        image: postgres:${{ matrix.pg }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r42-synthetic-ci
+          POSTGRES_DB: ox_test_factory_r40
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_test_factory_r40"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r42-synthetic-ci
+      PGDATABASE: ox_test_factory_r40
+      PGSSLMODE: disable
+      OX_R40_EPHEMERAL: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+      - run: npm run test:r42 && npm run test:r40 && npm run test:r41
+      - run: node --check server.mjs && node --check scripts/r41_pg_workflows_e2e.mjs
+      - run: node scripts/r41_pg_workflows_e2e.mjs --confirm-synthetic
