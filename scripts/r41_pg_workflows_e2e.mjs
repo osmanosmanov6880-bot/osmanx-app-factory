@@ -177,6 +177,15 @@ async function main(){
     const edited=await reqA(pathA+'/'+id,'PATCH',{fullName:'Updated PG client',notes:'synthetic'});
     requireStatus(edited,200,'Update PostgreSQL client');
     check(edited.data.client.notes==='synthetic','Updated row returned from PostgreSQL');checks++;
+    if(process.env.OX_R43_E2E==='YES'){
+      const quick1=await reqA(pathA+'/'+id,'PATCH',{notes:'First fast edit'});
+      const quick2=await reqA(pathA+'/'+id,'PATCH',{notes:'Second fast edit'});
+      requireStatus(quick1,200,'R4.3 first monotonic client version');
+      requireStatus(quick2,200,'R4.3 second monotonic client version');
+      check(quick1.data.client.updatedAt>edited.data.client.updatedAt &&
+        quick2.data.client.updatedAt>quick1.data.client.updatedAt &&
+        quick2.data.client.notes==='Second fast edit','R4.3 client revision not monotonic');checks++;
+    }
     const batch=await reqA(pathA+'/batch','POST',{items:[{fullName:'Batch 1'},{fullName:'Batch 2'}]});
     requireStatus(batch,201,'Atomic two-client batch');checks+=Number(batch.data.clients?.length===2);
     const beforeFailed=(await reqA(pathA)).data.clients.length;

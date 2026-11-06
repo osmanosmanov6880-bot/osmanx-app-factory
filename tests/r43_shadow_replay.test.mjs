@@ -127,6 +127,32 @@ test('R4.3 rejects a signed audit whose target is no longer present',async()=>{
       /signed audit event targets a missing PostgreSQL row/);
   }finally{await f.close();}
 });
+test('R4.3 accepts strictly ordered audited updates and verifies final state',async()=>{
+  const f=await fixture();
+  try{
+    const intermediate={...f.pg.clients[0],full_name:'Intermediate',updated_at:'2026-11-06T00:00:00.001Z'};
+    const latest={...f.pg.clients[0],full_name:'Final audited change',updated_at:'2026-11-06T00:00:00.002Z'};
+    const extra=event('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4','update','clients',intermediate);
+    const last=event('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa5','update','clients',latest);
+    const captures=f.captures.map(c=>c.table.name==='clients'?{...c,postgresRows:[latest]}:
+      c.table.name==='audit_log'?{...c,postgresRows:[...c.postgresRows,extra,last]}:c);
+    const result=applyR43ShadowPatch(f.db,captures,{secret});
+    assert.equal(result.shadowVerified,true);
+    assert.equal(f.db.prepare('SELECT full_name FROM clients').get().full_name,'Final audited change');
+    assert.equal(applyR43ShadowPatch(f.db,captures,{secret}).inserted,0);
+  }finally{await f.close();}
+});
+test('R4.3 refuses contradictory same-version audited after-images',async()=>{
+  const f=await fixture();
+  try{
+    const counterfeit=event('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4','update','clients',
+      {...f.pg.clients[0],full_name:'Other snapshot at same version'});
+    const captures=f.captures.map(c=>c.table.name==='audit_log'?
+      {...c,postgresRows:[...c.postgresRows,counterfeit]}:c);
+    assert.throws(()=>applyR43ShadowPatch(f.db,captures,{secret}),
+      /ambiguous same-version audit after-images/);
+  }finally{await f.close();}
+});
 test('R4.3 HMAC checkpoints deduplicate replay after a restart',async()=>{
   const folder=await mkdtemp(join(tmpdir(),'ox-r43-journal-'));
   const receipt={format:'osmanx-r43-shadow-replay-v1',syntheticOnly:true,readOnlySource:true,
