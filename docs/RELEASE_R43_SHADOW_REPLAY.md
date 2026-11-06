@@ -26,3 +26,7 @@ Must supply `OX_R40_PG_PREVIEW=YES` and signed R4.0 trust materials, plus:
 - R4.3 replays a **bounded, audited subset** of CRM operations into a **discarded shadow**; it does not run a permanent CDC tail or send any writes back to primary SQLite.
 - No active production write fence, full PG feature parity, tested real-data rollback or human release approval.
 - `productionCutoverAllowed` is hard-coded to false. Merging requires successful CI but never authorizes deployment or database switching.
+
+## Audit monotonicity
+
+Preview client updates acquire `SELECT ... FOR UPDATE` and increment the `updated_at` version monotonically, even for multiple updates within one millisecond. Audit entries include the HMAC of the complete post-change row and its monotonic row version. Before replay, R4.3 validates the most recent signed version for **every audited record**, including records that currently match the SQLite baseline, and rejects missing audit targets. These checks do not replace production CDC or a write fence.

@@ -26,6 +26,14 @@ export function r43AfterImageHmac(secret,entity,row){
   return createHmac('sha256',secret).update('OSMANX-R43-AFTER-IMAGE-v1\0')
     .update(entity+'\0').update(JSON.stringify(cells)).digest('hex');
 }
+export function r43AuditVersion(entity,row){
+  requireValue(Object.hasOwn(COLUMNS,entity),'unsupported versioned entity');
+  const value=entity==='visits'?row?.created_at:row?.updated_at;
+  requireValue(typeof value==='string'&&/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value)
+    &&!Number.isNaN(Date.parse(value))&&new Date(value).toISOString()===value,
+    'after-image version must be canonical ISO timestamp');
+  return value;
+}
 export async function writePgPreviewAudit(scope,{
   actorUserId=null,action,entity,entityId,afterImage
 }={}){
@@ -40,6 +48,7 @@ export async function writePgPreviewAudit(scope,{
     requireValue(typeof hex==='string'&&HEX64.test(hex),'missing private after-image key');
     metadata.auditVersion='r43-after-image-v1';
     metadata.afterImageHmac=r43AfterImageHmac(Buffer.from(hex,'hex'),entity,afterImage);
+    metadata.afterImageVersion=r43AuditVersion(entity,afterImage);
   }
   await scope.query('INSERT INTO audit_log(id,user_id,action,entity,entity_id,metadata_json,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
     [randomUUID(),actorUserId,'pg-preview.'+action,entity,entityId,JSON.stringify(metadata),new Date().toISOString()]);

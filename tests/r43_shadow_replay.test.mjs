@@ -6,7 +6,7 @@ import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {applyR43ShadowPatch} from '../src/migration/r43-shadow-replay.mjs';
-import {r43AfterImageHmac} from '../src/migration/r42-pg-audit.mjs';
+import {r43AfterImageHmac,r43AuditVersion} from '../src/migration/r42-pg-audit.mjs';
 import {appendR43Checkpoint,verifyR43Checkpoints} from '../src/migration/r43-replay-journal.mjs';
 import {validateR43Options} from '../src/migration/r43-pg-http.mjs';
 
@@ -29,7 +29,8 @@ const TABLES={
 };
 const event=(id,action,entity,row)=>({id,user_id:null,action:'pg-preview.'+action,
   entity,entity_id:row.id,metadata_json:JSON.stringify({surface:'postgresql-preview',actorKind:'studio-owner',
-    auditVersion:'r43-after-image-v1',afterImageHmac:r43AfterImageHmac(secret,entity,row)}),created_at:TIME});
+    auditVersion:'r43-after-image-v1',afterImageHmac:r43AfterImageHmac(secret,entity,row),
+    afterImageVersion:r43AuditVersion(entity,row)}),created_at:TIME});
 
 async function fixture(){
   const folder=await mkdtemp(join(tmpdir(),'ox-r43-unit-'));
@@ -103,6 +104,27 @@ test('R4.3 rejects direct mutation of a row that was previously audited',async()
     const before=r43AfterImageHmac(secret,'clients',f.pg.clients[0]);
     const after=r43AfterImageHmac(secret,'clients',{...f.pg.clients[0],full_name:'Unlogged after signed update'});
     assert.notEqual(before,after);
+  }finally{await f.close();}
+});
+test('R4.3 refuses unlogged rollback to the original SQLite value',async()=>{
+  const f=await fixture();
+  try{
+    // The row now looks identical to the signed SQLite baseline, but the
+    // latest audit still commits to a different PostgreSQL after-image.
+    const revert=f.captures.map(c=>c.table.name==='clients'
+      ?{...c,postgresRows:c.postgresRows.map(r=>({...r,full_name:'Original'}))}:c);
+    assert.throws(()=>applyR43ShadowPatch(f.db,revert,{secret}),
+      /latest signed after-image does not match PostgreSQL row/);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM audit_log').get().n,0);
+  }finally{await f.close();}
+});
+test('R4.3 rejects a signed audit whose target is no longer present',async()=>{
+  const f=await fixture();
+  try{
+    const orphan=f.captures.map(c=>c.table.name==='visits'
+      ?{...c,postgresRows:[]}:c);
+    assert.throws(()=>applyR43ShadowPatch(f.db,orphan,{secret}),
+      /signed audit event targets a missing PostgreSQL row/);
   }finally{await f.close();}
 });
 test('R4.3 HMAC checkpoints deduplicate replay after a restart',async()=>{

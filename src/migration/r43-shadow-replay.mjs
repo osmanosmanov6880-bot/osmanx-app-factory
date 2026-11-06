@@ -8,7 +8,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {quoteIdent} from './pg-kit.mjs';
 import {verifyTrustedMigration} from './pg-trust.mjs';
-import {r43AfterImageHmac} from './r42-pg-audit.mjs';
+import {r43AfterImageHmac,r43AuditVersion} from './r42-pg-audit.mjs';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MUTABLE=new Set(['clients','tasks','visits']);
@@ -100,7 +100,7 @@ function inventory(db,manifestNames){
 }
 function validateAudit(events,original,secret){
   const base=mapRows(original,{name:'audit_log',columns:[{name:'id',type:'TEXT'}],primary:['id']});
-  const signatures=new Set(),creations=new Set();
+  const signatures=new Set(),creations=new Set(),latest=new Map();
   for(const entry of events){
     if(base.has(JSON.stringify([entry.id])))continue;
     ensure(UUID.test(entry.id)&&UUID.test(entry.entity_id||''),'new audit entry IDs invalid');
@@ -111,10 +111,19 @@ function validateAudit(events,original,secret){
     ensure(metadata?.surface==='postgresql-preview'&&['employee','studio-owner'].includes(metadata.actorKind)
       &&metadata.auditVersion==='r43-after-image-v1'&&/^[a-f0-9]{64}$/.test(metadata.afterImageHmac||''),
       'audit origin or cryptographic after-image not verified');
-    signatures.add(entry.entity+':'+entry.entity_id+':'+entry.action+':'+metadata.afterImageHmac);
-    if(entry.action==='pg-preview.create')creations.add(entry.entity+':'+entry.entity_id);
+    const version=r43AuditVersion(entry.entity,{
+      updated_at:metadata.afterImageVersion,created_at:metadata.afterImageVersion
+    });
+    const id=entry.entity+':'+entry.entity_id;
+    const earlier=latest.get(id);
+    ensure(!earlier||earlier.version!==version||earlier.hash===metadata.afterImageHmac,
+      'ambiguous same-version audit after-images');
+    if(!earlier||version>earlier.version)
+      latest.set(id,{version,hash:metadata.afterImageHmac});
+    signatures.add(id+':'+entry.action+':'+metadata.afterImageHmac);
+    if(entry.action==='pg-preview.create')creations.add(id);
   }
-  return {signatures,creations,size:signatures.size};
+  return {signatures,creations,latest,size:signatures.size};
 }
 function preparePlan(db,captures,secret){
   const byName=new Map();
@@ -126,7 +135,7 @@ function preparePlan(db,captures,secret){
   ensure(byName.has('audit_log'),'PostgreSQL mutation audit required');
   const origAudit=sqlRows(db,byName.get('audit_log').table,10000);
   const coverage=validateAudit(byName.get('audit_log').postgresRows,origAudit,secret);
-  const plan=[],counts=[];
+  const plan=[],counts=[],observed=new Set();
   for(const c of captures){
     const table=c.table,name=table.name;
     const source=sqlRows(db,table,10000);
@@ -142,6 +151,16 @@ function preparePlan(db,captures,secret){
       ensure(delta.added.length===0&&delta.changed.length===0,'unsupported PostgreSQL mutation in '+name);
       counts.push({table:name,insert:0,update:0});
       continue;
+    }
+    for(const row of c.postgresRows){
+      const id=name+':'+row.id;
+      observed.add(id);
+      const last=coverage.latest.get(id);
+      if(last){
+        ensure(last.version===r43AuditVersion(name,row)&&
+          last.hash===r43AfterImageHmac(secret,name,row),
+          'latest signed after-image does not match PostgreSQL row');
+      }
     }
     for(const row of delta.added){
       const expected=r43AfterImageHmac(secret,name,row);
@@ -160,6 +179,8 @@ function preparePlan(db,captures,secret){
     }
     counts.push({table:name,insert:delta.added.length,update:delta.changed.length});
   }
+  for(const id of coverage.latest.keys())
+    ensure(observed.has(id),'signed audit event targets a missing PostgreSQL row');
   plan.sort((a,b)=>REPLAY_ORDER.indexOf(a.name)-REPLAY_ORDER.indexOf(b.name));
   return {plan,counts,auditEventCount:coverage.size};
 }
