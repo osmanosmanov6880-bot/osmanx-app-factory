@@ -1,0 +1,9 @@
+FROM node:22.15-alpine
+WORKDIR /app
+COPY src/migration/r48-witness.mjs /app/src/migration/r48-witness.mjs
+COPY ops/r49/witness-server.mjs /app/ops/r49/witness-server.mjs
+RUN mkdir -p /state && chown -R node:node /state /app
+USER node
+ENV NODE_ENV=production OX_R49_WITNESS_PORT=9080 OX_R49_WITNESS_STATE_DIR=/state
+EXPOSE 9080
+CMD ["node", "/app/ops/r49/witness-server.mjs"]
