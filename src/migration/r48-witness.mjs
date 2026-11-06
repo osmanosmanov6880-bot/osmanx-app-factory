@@ -114,8 +114,11 @@ export function createR48WitnessReceiver({root,token,secret}={}){
     const m=String(req.url||'').match(/^\/v1\/witness\/([a-f0-9]{24})$/);
     const expected=Buffer.from(token),header=String(req.headers.authorization||'');
     const given=Buffer.from(header.startsWith('Bearer ')?header.slice(7):'');
-    if(!m||given.length!==expected.length||!timingSafeEqual(given,expected)||
-      !['GET','POST'].includes(req.method)){req.resume();return send(res,404);}
+    if(!m||!['GET','POST'].includes(req.method)){req.resume();return send(res,404);}
+    // Only an authenticated GET may use 404 to mean "no witness yet".
+    if(given.length!==expected.length||!timingSafeEqual(given,expected)){
+      req.resume();return send(res,401);
+    }
     const tenant=m[1];
     try{
       await ensure();
