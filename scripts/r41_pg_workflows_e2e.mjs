@@ -97,7 +97,13 @@ function insertStudioFixtures(studio){
   return [issueSession(studio,ownerA),issueSession(studio,ownerB)];
 }
 function seedCrm(path,clientId,person,{staff=false}={}){
-  const db=crmDb(path);
+  const r44=staff&&process.env.OX_R44_E2E==='YES';
+  const customDefinitions=r44?[{
+    slug:'orders',title:'Synthetic orders',description:'',access:{
+      read:['admin','manager','staff'],write:['admin','manager']},
+    fields:[{key:'ticket',label:'Ticket',type:'text',required:false}]
+  }]:[];
+  const db=crmDb(path,customDefinitions);
   try{
     db.prepare('INSERT INTO clients(id,full_name,phone,email,source,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)')
       .run(clientId,person,'','','walkin','',now,now);
@@ -108,6 +114,25 @@ function seedCrm(path,clientId,person,{staff=false}={}){
     }
     db.prepare(`INSERT INTO tasks(id,title,description,status,priority,due_at,client_id,assigned_to,created_by,created_at,updated_at)
       VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(taskInitial,'Imported assigned task','','todo','medium',null,clientId,staffA,managerA,now,now);
+    if(r44){
+      const paymentId='dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+      const ruleId='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+      db.prepare(`INSERT INTO payments(id,client_id,amount_minor,currency,method,status,
+        external_reference,note,idem_key,request_fingerprint,created_by,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(paymentId,clientId,12500,'RUB','terminal','paid','','Synthetic invoice',
+          'synthetic-r44-payment','synthetic-only-fingerprint',managerA,now,now);
+      db.prepare(`INSERT INTO automations(id,name,event,task_title,priority,enabled,created_by,
+        created_at,entity_slug,condition_field,condition_value,due_days)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(ruleId,'Notify about order','entity_created','Call client','medium',1,managerA,now,
+          'orders',null,null,0);
+      db.prepare('INSERT INTO automation_runs(id,automation_id,event_key,task_id,created_at) VALUES(?,?,?,?,?)')
+        .run('ffffffff-ffff-4fff-8fff-ffffffffffff',ruleId,'synthetic-r44-event',taskInitial,now);
+      db.prepare(`INSERT INTO custom_orders(id,version,created_at,updated_at,archived_at,
+        created_by,ticket) VALUES(?,?,?,?,?,?,?)`)
+        .run('abababab-abab-4aba-8aba-abababababab',1,now,now,null,managerA,'Test booking');
+    }
     return {staff:issueSession(db,staffA),manager:issueSession(db,managerA)};
   }finally{db.close();}
 }
