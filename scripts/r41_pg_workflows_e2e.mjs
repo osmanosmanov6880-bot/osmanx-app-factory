@@ -317,7 +317,7 @@ async function main(){
       }finally{unchangedPrimary.close();}checks++;
       // Direct PG mutation with no pg-preview audit must fail closed.
       await adminPool.query('UPDATE "ox_p_'+projectA.replaceAll('-','')+
-        '".clients SET full_name=$1 WHERE id=$2',['Unlogged tampering',existingA]);
+        '".clients SET full_name=$1 WHERE id=$2',['Unlogged tampering of audited client',id]);
       const unlogged=await afterRestart(shadowPath+'/check','POST');
       requireStatus(unlogged,409,'R4.3 unlogged PG write refused');
       const historyAfter=await afterRestart(shadowPath+'/history');
