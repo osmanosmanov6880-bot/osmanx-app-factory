@@ -62,6 +62,18 @@ test('R44 rejects a missing custom table or invalid select option',()=>{
    assert.throws(()=>assessR44CriticalParity(f.db,f.capture(),{secret:k}),/invalid custom select value/);
  }finally{f.db.close();}
 });
+test('R44 denies missing signed payment table before any replay',()=>{
+ const f=setup();try{
+   const missing=f.capture().filter(c=>c.table.name!=='payments');
+   assert.throws(()=>assessR44CriticalParity(f.db,missing,{secret:k}),/required CRM table missing: payments/);
+ }finally{f.db.close();}
+});
+test('R44 rejects unsupported payment statuses despite matching snapshots',()=>{
+ const f=setup();try{
+   f.db.prepare('UPDATE payments SET status=?').run('unknown');
+   assert.throws(()=>assessR44CriticalParity(f.db,f.capture(),{secret:k}),/invalid payment status/);
+ }finally{f.db.close();}
+});
 test('R44 requires explicit synthetic opt-in',()=>{
  const env={OX_R43_SHADOW_REPLAY:'YES',OX_R43_CONFIRM_SYNTHETIC:'YES',OX_R42_PG_RECONCILIATION:'YES',OX_R40_PG_PREVIEW:'YES',OX_R42_JOURNAL_HMAC_KEY:k.toString('hex'),OX_R40_PG_BUNDLE:'/bundle',OX_R40_PG_TRUST_KEY:'/key',OX_R44_CRITICAL_PARITY:'YES'};
  assert.throws(()=>validateR43Options(env),/explicit synthetic fixture opt-in/);
