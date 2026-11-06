@@ -3,11 +3,12 @@
 // Creates private temporary Studio + two CRM SQLite fixtures, signs their
 // migration, imports into real PostgreSQL, and tests a limited LOGIN role.
 // NEVER operates on a production database or changes the primary runtime.
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID,createHmac } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createServer as createTcpListener } from 'node:net';
 import {createServer as createHttpServer} from 'node:http';
 import {createR47ObjectReceiver} from '../src/migration/r47-receiver.mjs';
+import {createR48WitnessReceiver} from '../src/migration/r48-witness.mjs';
 import { mkdtemp, mkdir, rm, rename, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,6 +38,11 @@ const r46OldKey=randomBytes(32).toString('hex');
 const r46NewKey=randomBytes(32).toString('hex');
 const r47Bearer=randomBytes(32).toString('hex');
 let r47Endpoint='';
+const r48WitnessKey=randomBytes(32).toString('hex');
+const r48QueueKey=randomBytes(32).toString('hex');
+const r48WebhookKey=randomBytes(32).toString('hex');
+const r48Bearer=randomBytes(32).toString('hex');
+let r48WitnessEndpoint='',r48AlertEndpoint='';
 let r46NextKeyActive=false;
 function check(ok,message) {if(!ok)throw Error(message);}
 function guard(){
@@ -80,6 +86,16 @@ async function launchFactory(dataDir,bundle,keyPath,pgUser,pgPass){
       OX_R47_ENDPOINT:r47Endpoint,OX_R47_REMOTE_TOKEN:r47Bearer,
       OX_R47_LOOPBACK_TEST:'YES',OX_R47_INTERVAL_MINUTES:'60',
       OX_R47_MAX_AGE_MINUTES:'180',OX_R47_SCHEDULE_PROJECT_IDS:projectA
+    }:{}),
+    ...(process.env.OX_R48_E2E==='YES'?{
+      OX_R48_PROTECTION:'YES',OX_R48_CONFIRM_SYNTHETIC:'YES',
+      OX_R48_WITNESS_ENDPOINT:r48WitnessEndpoint,
+      OX_R48_WITNESS_TOKEN:r48Bearer,
+      OX_R48_WITNESS_KEY_HEX:r48WitnessKey,
+      OX_R48_ALERT_QUEUE_KEY_HEX:r48QueueKey,
+      OX_R48_ALERT_WEBHOOK_KEY_HEX:r48WebhookKey,
+      OX_R48_ALERT_ENDPOINT:r48AlertEndpoint,
+      OX_R48_LOOPBACK_TEST:'YES'
     }:{})};
   const server=spawn(process.execPath,['server.mjs'],{cwd:new URL('../',import.meta.url),env,stdio:['ignore','pipe','pipe']});
   let tail='';let closed=false;
@@ -165,12 +181,35 @@ async function main(){
   // The driver is loaded only in explicitly enabled test/runtime contexts.
   const {Pool}=await import('pg');
   const dir=await mkdtemp(join(tmpdir(),'ox-r40-http-'));
-  let server,adminPool,offsiteServer;
+  let server,adminPool,offsiteServer,witnessServer,alertServer;
+  const alertReceived=[];
   try{
     if(process.env.OX_R47_E2E==='YES'){
       offsiteServer=createHttpServer(createR47ObjectReceiver({root:join(dir,'offsite-receiver'),token:r47Bearer}));
       await new Promise(resolve=>offsiteServer.listen(0,'127.0.0.1',resolve));
       r47Endpoint='http://127.0.0.1:'+offsiteServer.address().port+'/';
+    }
+    if(process.env.OX_R48_E2E==='YES'){
+      witnessServer=createHttpServer(createR48WitnessReceiver({
+        root:join(dir,'independent-witness'),token:r48Bearer,
+        secret:Buffer.from(r48WitnessKey,'hex')}));
+      await new Promise(resolve=>witnessServer.listen(0,'127.0.0.1',resolve));
+      r48WitnessEndpoint='http://127.0.0.1:'+witnessServer.address().port+'/';
+      alertServer=createHttpServer(async(req,res)=>{
+        const pieces=[];for await(const x of req)pieces.push(x);
+        const bytes=Buffer.concat(pieces),stamp=req.headers['x-ox-alert-at'];
+        const signature=createHmac('sha256',Buffer.from(r48WebhookKey,'hex'))
+          .update('OSMANX-R48-WEBHOOK-v1\0').update(String(stamp)).update('\0')
+          .update(bytes).digest('hex');
+        if(req.method!=='POST'||req.url!=='/v1/alerts'||
+          req.headers['x-ox-alert-signature']!==signature){
+          res.writeHead(403);res.end();return;
+        }
+        alertReceived.push(JSON.parse(bytes.toString('utf8')));
+        res.writeHead(204);res.end();
+      });
+      await new Promise(resolve=>alertServer.listen(0,'127.0.0.1',resolve));
+      r48AlertEndpoint='http://127.0.0.1:'+alertServer.address().port+'/';
     }
     const dataDir=join(dir,'data');const bundle=join(dir,'signed-export');
     await mkdir(join(dataDir,'projects'),{recursive:true,mode:0o700});
@@ -329,6 +368,52 @@ async function main(){
           'R4.7 remote head tampering denied');
       }finally{await writeFile(headPath,goodHead);}
     }
+    if(process.env.OX_R48_E2E==='YES'){
+      const route='/api/studio/pg-preview/projects/'+projectA+'/recovery';
+      const initial=await reqA(route+'/sync','POST');
+      requireStatus(initial,200,'R4.8 external witness confirms remote signed catalog');
+      check(initial.data.result.witnessConfirmed===true,'R4.8 independent witness not confirmed');checks++;
+      const token=(await import('../src/migration/r47-offsite.mjs'))
+        .r47TenantToken(Buffer.from(r46CatalogKey,'hex'),projectA);
+      const headPath=join(dir,'offsite-receiver',token,'head.json');
+      const oldHead=await readFile(headPath);
+      const extra=await reqA('/api/studio/pg-preview/projects/'+projectA+'/backup-vault/create','POST');
+      requireStatus(extra,200,'R4.8 new signed local backup advances remote catalog');
+      const updated=await reqA(route+'/sync','POST');
+      requireStatus(updated,200,'R4.8 independent witness advances monotonically');
+      const goodHead=await readFile(headPath);
+      await writeFile(headPath,oldHead);
+      try{
+        requireStatus(await reqA(route+'/drill','POST'),409,
+          'R4.8 older valid remote head rejected by independent witness');
+        const badStatus=await reqA(route+'/status');
+        requireStatus(badStatus,200,'R4.8 witnessed status detects rollback');
+        check(badStatus.data.healthy===false&&badStatus.data.alerts.pending>=1,
+          'R4.8 rollback was erroneously shown as healthy');checks++;
+        const delivered=await reqA(route+'/alerts','POST');
+        requireStatus(delivered,200,'R4.8 durable alert queue dispatched signed failure');
+        check(delivered.data.result.delivered>=1&&
+          alertReceived.some(x=>x.code==='ROLLBACK_DETECTED')&&
+          alertReceived.every(x=>!JSON.stringify(x).includes('Synthetic invoice')),
+          'R4.8 alerts missing or leaking client details');checks++;
+      }finally{await writeFile(headPath,goodHead);}
+      const restored=await reqA(route+'/drill','POST');
+      requireStatus(restored,200,'R4.8 measured independently witnessed disaster recovery');
+      check(restored.data.result.signedRestoreVerified===true&&
+        restored.data.result.meetsTargets===true&&
+        restored.data.result.financialRecords>=1&&
+        Number.isInteger(restored.data.result.rtoMs)&&
+        restored.data.result.productionCutoverAllowed===false,
+        'R4.8 measured remote restore proof not accepted');checks++;
+      const pruned=await reqA('/api/studio/pg-preview/projects/'+projectA+'/backup-vault/prune','POST');
+      requireStatus(pruned,200,'R4.8 restore original retention count before restart');
+      const prunedSync=await reqA(route+'/sync','POST');
+      requireStatus(prunedSync,200,'R4.8 witness advances to retained archive set');
+      requireStatus(await reqB(route+'/sync','POST'),404,'R4.8 cross-tenant witness denied');
+      requireStatus(await reqA(route+'/sync','POST',undefined,'bad-csrf'),403,
+        'R4.8 CSRF protects witness and remote storage');
+      requireStatus(await reqA(route+'/sync','GET'),405,'R4.8 GET cannot alter remote witness');
+    }
     const firstA=await reqA(pathA);requireStatus(firstA,200,'Owner A read');
     check(firstA.data.clients.length===1 && firstA.data.clients[0].fullName==='Original A','Owner A sees only own imported rows');checks++;
     const firstB=await reqB(pathB);requireStatus(firstB,200,'Owner B read');
@@ -483,6 +568,19 @@ async function main(){
       check(monitor.data.healthy===true,
         'R4.7 backup schedule checkpoint did not survive process restart');checks++;
     }
+    if(process.env.OX_R48_E2E==='YES'){
+      const route='/api/studio/pg-preview/projects/'+projectA+'/recovery';
+      const old=await afterRestart(route+'/status');
+      requireStatus(old,200,'R4.8 separate witness reports stale remote after key rotation');
+      check(old.data.protection.independentWitnessMatches===false,
+        'R4.8 witness incorrectly matched changed remote catalog');checks++;
+      const sync=await afterRestart(route+'/sync','POST');
+      requireStatus(sync,200,'R4.8 witness reattests rotated remote catalog');
+      const proof=await afterRestart(route+'/drill','POST');
+      requireStatus(proof,200,'R4.8 verified disaster recovery after restart');
+      check(proof.data.result.signedRestoreVerified===true&&
+        proof.data.result.financialRecords>=1,'R4.8 financial restore failed after restart');checks++;
+    }
     const afterTasks=await afterRestart(tasksA),afterVisits=await afterRestart(visitsA);
     requireStatus(afterTasks,200,'Task persists after server restart');
     requireStatus(afterVisits,200,'Visits persist after server restart');
@@ -562,12 +660,15 @@ async function main(){
       r45EncryptedRestoreVerified:process.env.OX_R45_E2E==='YES',
       r46RetainedEncryptedVaultVerified:process.env.OX_R46_E2E==='YES',
       r47OffsiteIndependentRecoveryVerified:process.env.OX_R47_E2E==='YES',
+      r48IndependentWitnessAndMeasuredRecoveryVerified:process.env.OX_R48_E2E==='YES',
       privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));
   }finally{
     if(server)await stopFactory(server);
     if(offsiteServer)await new Promise(resolve=>offsiteServer.close(resolve));
+    if(witnessServer)await new Promise(resolve=>witnessServer.close(resolve));
+    if(alertServer)await new Promise(resolve=>alertServer.close(resolve));
     if(adminPool)await adminPool.end();
     await rm(dir,{recursive:true,force:true});
   }
