@@ -1,0 +1,10 @@
+{$OX_R51_ANCHOR_DOMAIN} {
+    encode zstd gzip
+    header {
+      Cache-Control "no-store"
+      X-Content-Type-Options "nosniff"
+      Strict-Transport-Security "max-age=31536000"
+    }
+    request_body { max_size 16KB }
+    reverse_proxy anchor:9081
+}

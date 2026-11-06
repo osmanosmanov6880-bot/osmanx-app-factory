@@ -1,0 +1,9 @@
+FROM node:22.15-alpine
+WORKDIR /app
+COPY src/migration/r48-witness.mjs /app/src/migration/r48-witness.mjs
+COPY ops/r51/audit-server.mjs /app/ops/r51/audit-server.mjs
+RUN mkdir /state && chown -R node:node /state /app
+USER node
+ENV NODE_ENV=production OX_R51_ANCHOR_PORT=9081 OX_R51_ANCHOR_ROOT=/state
+EXPOSE 9081
+CMD ["node", "/app/ops/r51/audit-server.mjs"]

@@ -1,0 +1,41 @@
+# Deploy on another failure domain; this is a test receiver, not paging.
+services:
+  alerts:
+    build:
+      context: ../..
+      dockerfile: ops/r51/Dockerfile.alert
+    restart: unless-stopped
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=8m,noexec,nosuid"]
+    secrets: [alert_token,alert_key]
+    environment:
+      OX_R51_ALERT_TOKEN_FILE: /run/secrets/alert_token
+      OX_R51_ALERT_HMAC_FILE: /run/secrets/alert_key
+    expose: ["9082"]
+    networks: [private]
+  tls:
+    image: caddy:2.9-alpine
+    restart: unless-stopped
+    depends_on: [alerts]
+    ports: ["80:80", "443:443"]
+    environment:
+      OX_R51_ALERT_DOMAIN: ${OX_R51_ALERT_DOMAIN:?set independent alert hostname}
+    volumes:
+      - ./Caddyfile.alert:/etc/caddy/Caddyfile:ro
+      - tls_data:/data
+      - tls_config:/config
+    networks: [private,public]
+secrets:
+  alert_token:
+    file: ${OX_R51_ALERT_TOKEN_FILE:?set external token-file path}
+  alert_key:
+    file: ${OX_R51_ALERT_HMAC_FILE:?set external key-file path}
+volumes:
+  tls_data:
+  tls_config:
+networks:
+  private:
+    internal: true
+  public:
