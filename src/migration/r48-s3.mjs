@@ -124,7 +124,7 @@ export function createR48S3Transport({endpoint,bucket,region,accessKey,secretKey
     deny(typeof hdr['x-amz-version-id']==='string'&&hdr['x-amz-version-id'].length>0&&
       hdr['x-amz-version-id']!=='null','S3 encrypted object lacks a version ID');
     return {objectLockVerified:true,retentionMode:'COMPLIANCE',
-      retentionUntil:new Date(until).toISOString(),versioned:true,
+      retentionUntil:new Date(until).toISOString(),versionId:hdr['x-amz-version-id'],versioned:true,
       productionCutoverAllowed:false};
   }
   return Object.freeze({put,get,assertBucketControls,inspectR49Worm,transport:'s3-sigv4-v1',
