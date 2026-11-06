@@ -113,7 +113,7 @@ test('R4.3 rejects direct mutation of a row that was previously audited',async()
   try{
     const modified=f.captures.map(c=>c.table.name==='clients'
       ?{...c,postgresRows:c.postgresRows.map(row=>({...row,full_name:'Unlogged after signed update'}))}:c);
-    assert.throws(()=>applyR43ShadowPatch(f.db,modified,{secret}),/no matching signed after-image/);
+    assert.throws(()=>applyR43ShadowPatch(f.db,modified,{secret}),/latest signed after-image does not match PostgreSQL row/);
     assert.equal(f.db.prepare('SELECT full_name FROM clients').get().full_name,'Original');
     const before=r43AfterImageHmac(secret,'clients',f.pg.clients[0]);
     const after=r43AfterImageHmac(secret,'clients',{...f.pg.clients[0],full_name:'Unlogged after signed update'});
