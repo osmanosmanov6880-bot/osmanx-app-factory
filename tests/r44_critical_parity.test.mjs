@@ -7,14 +7,14 @@ import {validateR43Options} from '../src/migration/r43-pg-http.mjs';
 const k=randomBytes(32),U='11111111-1111-4111-8111-111111111111',C='22222222-2222-4222-8222-222222222222',T='33333333-3333-4333-8333-333333333333',P='44444444-4444-4444-8444-444444444444',A='55555555-5555-4555-8555-555555555555',V='66666666-6666-4666-8666-666666666666';
 function setup(){
  const db=new DatabaseSync(':memory:');
- db.exec('CREATE TABLE users(id TEXT PRIMARY KEY);CREATE TABLE clients(id TEXT PRIMARY KEY);CREATE TABLE tasks(id TEXT PRIMARY KEY);CREATE TABLE payments(id TEXT PRIMARY KEY,client_id TEXT,amount_minor INTEGER,currency TEXT,method TEXT,status TEXT,idem_key TEXT,request_fingerprint TEXT,created_by TEXT);CREATE TABLE automations(id TEXT PRIMARY KEY,event TEXT,priority TEXT,enabled INTEGER,due_days INTEGER,entity_slug TEXT,created_by TEXT);CREATE TABLE automation_runs(id TEXT PRIMARY KEY,automation_id TEXT,event_key TEXT,task_id TEXT);CREATE TABLE custom_entity_schema(slug TEXT PRIMARY KEY,definition_json TEXT);CREATE TABLE custom_orders(id TEXT PRIMARY KEY,version INTEGER,created_by TEXT,ticket TEXT);');
+ db.exec('CREATE TABLE users(id TEXT PRIMARY KEY);CREATE TABLE clients(id TEXT PRIMARY KEY);CREATE TABLE tasks(id TEXT PRIMARY KEY);CREATE TABLE payments(id TEXT PRIMARY KEY,client_id TEXT,amount_minor INTEGER,currency TEXT,method TEXT,status TEXT,idem_key TEXT,request_fingerprint TEXT,created_by TEXT);CREATE TABLE automations(id TEXT PRIMARY KEY,event TEXT,priority TEXT,enabled INTEGER,due_days INTEGER,entity_slug TEXT,created_by TEXT);CREATE TABLE automation_runs(id TEXT PRIMARY KEY,automation_id TEXT,event_key TEXT,task_id TEXT);CREATE TABLE custom_entity_schema(slug TEXT PRIMARY KEY,definition_json TEXT,updated_at TEXT NOT NULL);CREATE TABLE custom_orders(id TEXT PRIMARY KEY,version INTEGER NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,archived_at TEXT,created_by TEXT,ticket TEXT);');
  db.prepare('INSERT INTO users VALUES(?)').run(U);db.prepare('INSERT INTO clients VALUES(?)').run(C);
  db.prepare('INSERT INTO tasks VALUES(?)').run(T);
  db.prepare('INSERT INTO payments VALUES(?,?,?,?,?,?,?,?,?)').run(P,C,12500,'RUB','terminal','paid','r44-idem','r44-fp',U);
  db.prepare('INSERT INTO automations VALUES(?,?,?,?,?,?,?)').run(A,'entity_created','medium',1,0,'orders',U);
  db.prepare('INSERT INTO automation_runs VALUES(?,?,?,?)').run(V,A,'r44-event',T);
- db.prepare('INSERT INTO custom_entity_schema VALUES(?,?)').run('orders',JSON.stringify({slug:'orders',fields:[{key:'ticket',type:'text',required:false}]}));
- db.prepare('INSERT INTO custom_orders VALUES(?,?,?,?)').run('77777777-7777-4777-8777-777777777777',1,U,'Synthetic');
+ db.prepare('INSERT INTO custom_entity_schema VALUES(?,?,?)').run('orders',JSON.stringify({slug:'orders',fields:[{key:'ticket',type:'text',required:false}]}),'2026-11-06T00:00:00.000Z');
+ db.prepare('INSERT INTO custom_orders VALUES(?,?,?,?,?,?,?)').run('77777777-7777-4777-8777-777777777777',1,'2026-11-06T00:00:00.000Z','2026-11-06T00:00:00.000Z',null,U,'Synthetic');
  function capture(){return ['users','clients','tasks','payments','automations','automation_runs','custom_entity_schema','custom_orders'].map(name=>{
    const meta=db.prepare('PRAGMA table_info("'+name+'")').all();
    const columns=meta.map(c=>({name:c.name,type:c.type==='INTEGER'?'BIGINT':'TEXT'}));
