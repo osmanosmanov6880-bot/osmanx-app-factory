@@ -22,11 +22,12 @@ let db;
 try{db=studioDb(resolve(data,'studio.sqlite'));}catch(e){releaseLock();throw e;}
 const crmCache=new Map();
 // Strictly opt-in PostgreSQL staging API. Any failed setup aborts server startup.
-let pgPreview;
-const r42Options=validateR42Options(process.env);
-const r43Options=validateR43Options(process.env);
-try {pgPreview=await createR40Runtime({studioDb:db});}
-catch(error) {db.close();releaseLock();throw error;}
+let pgPreview,r42Options,r43Options;
+try {
+  r42Options=validateR42Options(process.env);
+  r43Options=validateR43Options(process.env);
+  pgPreview=await createR40Runtime({studioDb:db});
+} catch(error) {db.close();releaseLock();throw error;}
 const port=Number(process.env.PORT||4173);
 const host=process.env.HOST||'127.0.0.1';
 assertSafePublicBootstrap(host,!!db.prepare('SELECT id FROM users LIMIT 1').get());

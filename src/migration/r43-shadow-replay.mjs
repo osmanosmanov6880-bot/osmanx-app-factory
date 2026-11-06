@@ -269,6 +269,7 @@ export async function runR43ShadowReplay({
   try{
     const source=new DatabaseSync(sqlitePath,{readOnly:true});
     try{await backup(source,shadow);}finally{source.close();}
+    ensure(lstatSync(shadow).size<=128*1024*1024,'shadow snapshot exceeds size limit');
     db=new DatabaseSync(shadow,{enableForeignKeyConstraints:true});
     db.exec('PRAGMA foreign_keys=ON');
     baselineCheck(db,entry,maxRowsPerTable);
@@ -287,7 +288,6 @@ export async function runR43ShadowReplay({
       checkpointHmac:fingerprint(captures,secret),
       shadowDestroyedOnExit:true,primarySqliteModified:false,productionCutoverAllowed:false};
   }finally{
-    db?.close();
-    await rm(directory,{recursive:true,force:true});
+    try{db?.close();}finally{await rm(directory,{recursive:true,force:true});}
   }
 }
