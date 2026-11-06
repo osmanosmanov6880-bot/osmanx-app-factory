@@ -73,6 +73,9 @@ test('R4.7 detects ciphertext alteration on the remote disk and fails closed',as
     corrupt[corrupt.length-1]^=1;await writeFile(path,corrupt);
     await assert.rejects(recoverR47Offsite({vault:f.vault,remote:f.transport()}),
       /remote encrypted blob digest mismatch/);
+    // An intact signed catalog must not mask corrupted ciphertext in health.
+    await assert.rejects(inspectR47OffsiteStatus({vault:f.vault,remote:f.transport()}),
+      /remote encrypted blob digest mismatch/);
   }finally{await f.close();}
 });
 test('R4.7 refuses cross-tenant replay, unauthorized token and HTTP redirects',async()=>{
