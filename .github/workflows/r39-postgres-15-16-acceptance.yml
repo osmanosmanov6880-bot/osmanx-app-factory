@@ -1,0 +1,79 @@
+name: R3.9 real PostgreSQL 15 and 16 signed migration acceptance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/migration/**'
+      - 'scripts/r39_pg_real_e2e.mjs'
+      - 'scripts/pg_demo.mjs'
+      - 'tests/r39_pg_acceptance.test.mjs'
+      - 'package.json'
+      - '.github/workflows/r39-postgres-15-16-acceptance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r39-postgres-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  signed-postgres-migration:
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15', '16']
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic-only-r39-ci-password
+          POSTGRES_DB: ox_test_factory_r39
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_test_factory_r39"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: '5432'
+      PGDATABASE: ox_test_factory_r39
+      PGUSER: postgres
+      PGPASSWORD: synthetic-only-r39-ci-password
+      PGSSLMODE: disable
+      OX_R39_EPHEMERAL: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install official PostgreSQL client and verify server is available
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE"
+      - name: Run R3.9 safety guards and syntax checks
+        run: |
+          node --check src/migration/r39-acceptance.mjs
+          node --check scripts/r39_pg_real_e2e.mjs
+          node --test tests/r39_pg_acceptance.test.mjs
+      - name: Real signed SQLite export, forced atomic failure, role isolation and snapshot audit
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          node scripts/r39_pg_real_e2e.mjs --confirm-synthetic | tee artifacts/r39-postgres-${{ matrix.postgres }}.json
+      - name: Retain non-sensitive synthetic acceptance receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r39-postgres-${{ matrix.postgres }}-synthetic-acceptance
+          path: artifacts/r39-postgres-${{ matrix.postgres }}.json
+          if-no-files-found: ignore
+          retention-days: 7

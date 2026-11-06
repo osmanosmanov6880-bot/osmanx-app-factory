@@ -1,3 +1,5 @@
+> **R3.9 PostgreSQL Test Gate:** в коде добавлена изолированная проверка реального PostgreSQL 15/16 с синтетическими данными, подписанным импортом, аварийным откатом и 30 SQL-проверками полномочий ролей. GitHub Actions: `r39-postgres-15-16-acceptance.yml`. Подробнее: [`docs/RELEASE_R39_POSTGRES_LIVE_ACCEPTANCE.md`](docs/RELEASE_R39_POSTGRES_LIVE_ACCEPTANCE.md). Приложение **по-прежнему работает на SQLite**; включение PostgreSQL runtime не выполнялось.
+
 # OSMANX APP FACTORY R3.7 Preview — безопасные релизы и Docker-приёмка
 
 > **Объединённая Preview-сборка:** R3.7 + независимый набор PostgreSQL Signed Transition Kit R13. Сервер, CRM и сайты по-прежнему работают на SQLite. PostgreSQL не включён в runtime. Настоящий PostgreSQL E2E и production-переход не проверены. См. [`docs/BRANCH_CONSOLIDATION_R37_PG_R13.md`](docs/BRANCH_CONSOLIDATION_R37_PG_R13.md).
