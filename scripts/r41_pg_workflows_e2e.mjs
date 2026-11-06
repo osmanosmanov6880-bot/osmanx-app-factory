@@ -3,7 +3,7 @@
 // Creates private temporary Studio + two CRM SQLite fixtures, signs their
 // migration, imports into real PostgreSQL, and tests a limited LOGIN role.
 // NEVER operates on a production database or changes the primary runtime.
-import { randomBytes, randomUUID,createHmac } from 'node:crypto';
+import { randomBytes, randomUUID,createHmac,createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createServer as createTcpListener } from 'node:net';
 import {createServer as createHttpServer} from 'node:http';
@@ -283,7 +283,7 @@ async function main(){
     const reqA=authRequest(live.url,sA.token,sA.csrf),reqB=authRequest(live.url,sB.token,sB.csrf);
     const pathA='/api/studio/pg-preview/projects/'+projectA+'/clients';
     const pathB='/api/studio/pg-preview/projects/'+projectB+'/clients';
-    let checks=0,vaultSurvivorId;
+    let checks=0,vaultSurvivorId,r52FaultReport,r52RecoveryFile;
     const requireStatus=(r,expected,label)=>{check(r.status===expected,`${label}: HTTP ${r.status}`);checks++;};
     requireStatus(await reqA('/api/studio/pg-preview/status'),200,'Preview status');
     const reconcilePath='/api/studio/pg-preview/projects/'+projectA+'/reconcile';
@@ -702,6 +702,7 @@ async function main(){
         Number.isInteger(recovery.measuredRecoveryMs)&&
         recovery.productionCutoverAllowed===false,
         'R4.9 independently restored signed full CRM data incorrectly');checks++;
+      if(process.env.OX_R52_E2E==='YES')r52RecoveryFile=recovery.outputFile;
       const recovered=crmDb(recovery.outputFile);
       try{
         check(recovered.prepare('SELECT amount_minor FROM payments').get().amount_minor===12500&&
@@ -818,6 +819,74 @@ async function main(){
           check(denied,'R5.1 untrusted audit bearer obtained signed remote head');checks++;
           check((await runR51OperationalReadiness(scope)).productionCutoverAllowed===false,
             'R5.1 remote signed audit incorrectly permitted production cutover');checks++;
+          if(process.env.OX_R52_E2E==='YES'){
+            const {runR52FailureMatrix}=await import('../src/migration/r52-failure-matrix.mjs');
+            const primaryPath=join(dataDir,'projects',projectA+'.sqlite');
+            const fingerprint=async()=>createHash('sha256')
+              .update(await readFile(primaryPath)).digest('hex');
+            const original=await fingerprint();
+            const docker=async(...args)=>{
+              const child=spawn('docker',args,{stdio:['ignore','ignore','pipe']});
+              let stderr='';
+              child.stderr.on('data',b=>{stderr=(stderr+b.toString('utf8')).slice(-300);});
+              const exit=await Promise.race([
+                new Promise((resolve,reject)=>{
+                  child.once('error',reject);
+                  child.once('close',code=>resolve(code));
+                }),sleep(15000).then(()=>null)
+              ]);
+              if(exit===null){
+                child.kill('SIGKILL');throw Error('R5.2 local MinIO fault command timed out');
+              }
+              check(exit===0,'R5.2 local MinIO container action failed');
+            };
+            const restartHttp=target=>{
+              const port=target.address().port;
+              return {
+                isolate:()=>new Promise((resolve,reject)=>target.close(e=>e?reject(e):resolve())),
+                restore:()=>new Promise((resolve,reject)=>{
+                  target.once('error',reject);
+                  target.listen(port,'127.0.0.1',()=>{
+                    target.removeListener('error',reject);resolve();
+                  });
+                })
+              };
+            };
+            const witnessLink=restartHttp(witness49Server);
+            const anchorLink=restartHttp(r51AnchorServer);
+            const alertsLink=restartHttp(r51AlertServer);
+            const probe=()=>runR51OperationalReadiness(scope);
+            r52FaultReport=await runR52FailureMatrix({
+              syntheticOnly:true,probe,readOnlyFingerprint:fingerprint,
+              expectedFingerprint:original,maxRecoveryMs:30000,
+              scenarios:[
+                {name:'storage',
+                  isolate:()=>docker('stop','-t','2','r49-minio-ci'),
+                  restore:async()=>{
+                    await docker('start','r49-minio-ci');
+                    let healthy=false;
+                    for(let n=0;n<100;n++){
+                      try{
+                        const response=await fetch('http://127.0.0.1:9000/minio/health/live',
+                          {signal:AbortSignal.timeout(750)});
+                        if(response.status===200){healthy=true;break;}
+                      }catch{}
+                      await sleep(100);
+                    }
+                    check(healthy,'R5.2 real MinIO did not recover after container restart');
+                  }},
+                {name:'backupWitness',...witnessLink},
+                {name:'auditAnchor',...anchorLink},
+                {name:'alerts',...alertsLink}
+              ]});
+            check(r52FaultReport.failedServicesExercised===4&&
+              r52FaultReport.everyFaultDeniedReadiness===true&&
+              r52FaultReport.everyRecoveryRevalidated===true&&
+              r52FaultReport.sourceFingerprintUnchanged===true&&
+              r52FaultReport.productionCutoverAllowed===false,
+              'R5.2 real service-failure matrix was not independently accepted');checks++;
+          }
+
         }
         const stale=await runR50RecoveryExercise({...offlineArgs,...topology,evidence,
           now:Date.now()+3600000,maxRtoMs:120000,maxBackupAgeMs:60000});
@@ -940,6 +1009,48 @@ async function main(){
       requireStatus(historyAfter,200,'R4.3 journal unchanged after rejected direct write');
       check(historyAfter.data.entries===1,'R4.3 failure created a misleading checkpoint');checks++;
     }
+    if(process.env.OX_R52_E2E==='YES'){
+      const {inspectR52SyntheticTransactionLoss,enforceR52SyntheticLossBudget}=
+        await import('../src/migration/r52-rpo.mjs');
+      const {writeR52RehearsalReceipt,verifyR52RehearsalReceipt}=
+        await import('../src/migration/r52-receipt.mjs');
+      check(r52RecoveryFile&&r52FaultReport,'R5.2 recovery and fault prerequisites missing');
+      const syntheticMarker='52525252-5252-4525-8525-525252525252';
+      const sourcePath=join(dataDir,'projects',projectA+'.sqlite');
+      const primary=crmDb(sourcePath);
+      try{
+        // Commit exactly one synthetic *post-backup* task. No new backup is
+        // taken after this write, so one transaction is deliberately lost
+        // from an otherwise healthy, signed historical restore.
+        primary.prepare('INSERT INTO tasks(id,title,description,status,priority,due_at,client_id,assigned_to,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+          .run(syntheticMarker,'R5.2 post-backup synthetic commit','',
+            'todo','medium',null,existingA,staffA,managerA,now,now);
+      }finally{primary.close();}
+      const rpo=inspectR52SyntheticTransactionLoss({
+        sourcePath,recoveredPath:r52RecoveryFile,
+        committedAfterBackupIds:[syntheticMarker],maxLostTransactions:0,syntheticOnly:true});
+      check(rpo.committedAfterBackup===1&&rpo.recoveredAfterBackup===0&&
+        rpo.lostSinceBackup===1&&rpo.withinTestLossBudget===false&&
+        rpo.transactionLevelRpoSecondsMeasured===false,
+        'R5.2 backup age incorrectly reported zero committed transaction loss');checks++;
+      let deniedLoss=false;
+      try{enforceR52SyntheticLossBudget(rpo);}catch{deniedLoss=true;}
+      check(deniedLoss,'R5.2 zero-loss gate accepted a deliberately stale signed backup');checks++;
+      const receiptOpts={
+        directory:join(dir,'r52-private-receipts'),
+        tenantToken:(await import('../src/migration/r47-offsite.mjs'))
+          .r47TenantToken(Buffer.from(r46CatalogKey,'hex'),projectA),
+        key:randomBytes(32)
+      };
+      const stored=await writeR52RehearsalReceipt(receiptOpts,{
+        matrix:r52FaultReport,rpo});
+      const verified=await verifyR52RehearsalReceipt(receiptOpts,stored.receiptId);
+      check(verified.signedReceiptVerified===true&&
+        verified.reportedLostTransactions===1&&
+        verified.syntheticLossBudgetMet===false&&
+        verified.productionCutoverAllowed===false,
+        'R5.2 private disaster report distorted lost transactions or cutover status');checks++;
+    }
     const receipt={format:process.env.OX_R43_E2E==='YES'?'osmanx-r43-real-pg-shadow-acceptance':'osmanx-r42-real-pg-crm-reconciliation',success:true,syntheticOnly:true,
       pgVersionNum:version,realPostgres:true,realHttp:true,signedManifestVerified:true,
       tenantSchemas:2,rolesWithLeastPrivilege:true,forbiddenCrossTenantRequests:3,
@@ -957,6 +1068,7 @@ async function main(){
       r49LiveS3ObjectLockAndOfflineRestoreVerified:process.env.OX_R49_E2E==='YES',
       r50SyntheticOperationalGateAndDetachedRecoveryVerified:process.env.OX_R50_E2E==='YES',
       r51IndependentAuditAndSignedAlertVerified:process.env.OX_R51_E2E==='YES',
+      r52FourInfrastructureOutagesAndPostBackupLossVerified:process.env.OX_R52_E2E==='YES',
       privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));
