@@ -1,0 +1,93 @@
+name: R4.5 PostgreSQL 15 16 encrypted CRM backup and restore acceptance
+on:
+  push:
+    branches: ['feat/r45-encrypted-backup-recovery', main]
+    paths:
+      - 'src/migration/**'
+      - 'server.mjs'
+      - 'scripts/r41_pg_workflows_e2e.mjs'
+      - 'tests/r45_*.test.mjs'
+      - 'package.json'
+      - '.github/workflows/r45-pg-backup-restore.yml'
+  pull_request:
+    paths:
+      - 'src/migration/**'
+      - 'server.mjs'
+      - 'scripts/r41_pg_workflows_e2e.mjs'
+      - 'tests/r45_*.test.mjs'
+      - 'package.json'
+      - '.github/workflows/r45-pg-backup-restore.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: r45-backup-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  encrypted-restore:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r45-synthetic-only-test-secret
+          POSTGRES_DB: ox_test_factory_r40
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_test_factory_r40"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r45-synthetic-only-test-secret
+      PGDATABASE: ox_test_factory_r40
+      PGSSLMODE: disable
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R43_E2E: 'YES'
+      OX_R44_E2E: 'YES'
+      OX_R45_E2E: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install locked PostgreSQL client
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Test database liveness
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE"
+      - name: Cryptography, restore, authorization and regression suites
+        run: |
+          npm run test:r45
+          npm run test:r44
+          npm run test:r43
+          npm run test:r42
+          npm run test:r41
+          npm run test:r40
+          node --check server.mjs
+          node --check scripts/r41_pg_workflows_e2e.mjs
+          node --check src/migration/r45-restore-drill.mjs
+      - name: Signed synthetic PostgreSQL and complete encrypted SQLite recovery
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          node scripts/r41_pg_workflows_e2e.mjs --confirm-synthetic | tee artifacts/r45-pg-${{ matrix.postgres }}.json
+      - name: Retain synthetic verification receipts only
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r45-pg-${{ matrix.postgres }}-synthetic
+          path: artifacts/r45-pg-${{ matrix.postgres }}.json
+          if-no-files-found: ignore
+          retention-days: 7
