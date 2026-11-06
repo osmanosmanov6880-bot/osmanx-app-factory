@@ -22,9 +22,9 @@ const secret=randomBytes(32);
 const table=(name,columns)=>({name,primary:['id'],columns:columns.map(name=>({name,type:'TEXT'}))});
 const TABLES={
   users:table('users',['id','role']),
-  clients:table('clients',['id','full_name']),
-  tasks:table('tasks',['id','title','client_id','assigned_to']),
-  visits:table('visits',['id','client_id','occurred_at']),
+  clients:table('clients',['id','full_name','phone','email','source','notes','archived_at','created_at','updated_at']),
+  tasks:table('tasks',['id','title','description','status','priority','due_at','client_id','assigned_to','created_by','created_at','updated_at']),
+  visits:table('visits',['id','client_id','occurred_at','note','created_by','created_at']),
   audit_log:table('audit_log',['id','user_id','action','entity','entity_id','metadata_json','created_at'])
 };
 const event=(id,action,entity,row)=>({id,user_id:null,action:'pg-preview.'+action,
@@ -34,14 +34,14 @@ const event=(id,action,entity,row)=>({id,user_id:null,action:'pg-preview.'+actio
 async function fixture(){
   const folder=await mkdtemp(join(tmpdir(),'ox-r43-unit-'));
   const db=new DatabaseSync(join(folder,'shadow.sqlite'),{enableForeignKeyConstraints:true});
-  db.exec('PRAGMA foreign_keys=ON; CREATE TABLE users(id TEXT PRIMARY KEY,role TEXT NOT NULL); CREATE TABLE clients(id TEXT PRIMARY KEY,full_name TEXT NOT NULL); CREATE TABLE tasks(id TEXT PRIMARY KEY,title TEXT NOT NULL,client_id TEXT NOT NULL REFERENCES clients(id),assigned_to TEXT REFERENCES users(id)); CREATE TABLE visits(id TEXT PRIMARY KEY,client_id TEXT NOT NULL REFERENCES clients(id),occurred_at TEXT NOT NULL); CREATE TABLE audit_log(id TEXT PRIMARY KEY,user_id TEXT REFERENCES users(id),action TEXT NOT NULL,entity TEXT NOT NULL,entity_id TEXT,metadata_json TEXT NOT NULL,created_at TEXT NOT NULL);');
+  db.exec('PRAGMA foreign_keys=ON; CREATE TABLE users(id TEXT PRIMARY KEY,role TEXT NOT NULL); CREATE TABLE clients(id TEXT PRIMARY KEY,full_name TEXT NOT NULL,phone TEXT NOT NULL,email TEXT NOT NULL,source TEXT NOT NULL,notes TEXT NOT NULL,archived_at TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL); CREATE TABLE tasks(id TEXT PRIMARY KEY,title TEXT NOT NULL,description TEXT NOT NULL,status TEXT NOT NULL,priority TEXT NOT NULL,due_at TEXT,client_id TEXT REFERENCES clients(id),assigned_to TEXT REFERENCES users(id),created_by TEXT REFERENCES users(id),created_at TEXT NOT NULL,updated_at TEXT NOT NULL); CREATE TABLE visits(id TEXT PRIMARY KEY,client_id TEXT NOT NULL REFERENCES clients(id),occurred_at TEXT NOT NULL,note TEXT NOT NULL,created_by TEXT REFERENCES users(id),created_at TEXT NOT NULL); CREATE TABLE audit_log(id TEXT PRIMARY KEY,user_id TEXT REFERENCES users(id),action TEXT NOT NULL,entity TEXT NOT NULL,entity_id TEXT,metadata_json TEXT NOT NULL,created_at TEXT NOT NULL);');
   db.prepare('INSERT INTO users VALUES(?,?)').run(U,'staff');
-  db.prepare('INSERT INTO clients VALUES(?,?)').run(C,'Original');
+  db.prepare('INSERT INTO clients VALUES(?,?,?,?,?,?,?,?,?)').run(C,'Original','','','unknown','',null,TIME,TIME);
   const pg={
     users:[{id:U,role:'staff'}],
-    clients:[{id:C,full_name:'Changed in PG'}],
-    tasks:[{id:T,title:'First',client_id:C,assigned_to:U}],
-    visits:[{id:V,client_id:C,occurred_at:TIME}],
+    clients:[{id:C,full_name:'Changed in PG',phone:'',email:'',source:'unknown',notes:'',archived_at:null,created_at:TIME,updated_at:TIME}],
+    tasks:[{id:T,title:'First',description:'',status:'todo',priority:'medium',due_at:null,client_id:C,assigned_to:U,created_by:null,created_at:TIME,updated_at:TIME}],
+    visits:[{id:V,client_id:C,occurred_at:TIME,note:'',created_by:null,created_at:TIME}],
     audit_log:[]
   };
   pg.audit_log=[event(A1,'update','clients',pg.clients[0]),
