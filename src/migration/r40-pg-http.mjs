@@ -176,7 +176,7 @@ export async function handleR40PreviewRequest(req, res, {studioDb, runtime}) {
     checkId(target);
     const data = clientValues(await bodyJson(req), true);
     const columns = Object.keys(data), values = columns.map(key=>data[key]);
-    const assignments = columns.map((key,i)=>`"${COLUMNS[key]}"=${i+1}`);
+    const assignments = columns.map((key,i)=>`"${COLUMNS[key]}"=$${i+1}`);
     const client = await runtime.adapter.transaction({actorId:actor.id,projectId,mode:'write'}, async scope => {
       // Serialize updates to one client so every committed audit after-image
       // has a strictly increasing version even for writes within one millisecond.
@@ -187,8 +187,8 @@ export async function handleR40PreviewRequest(req, res, {studioDb, runtime}) {
       if(!Number.isFinite(oldTick))throw Error('Invalid client version in PostgreSQL');
       const updatedAt=new Date(Math.max(Date.now(),oldTick+1)).toISOString();
       const args=[...values,updatedAt,target];
-      const result = await scope.query(`UPDATE clients SET ${assignments.join(', ')}, updated_at=${columns.length+1}
-        WHERE id=${columns.length+2} AND archived_at IS NULL
+      const result = await scope.query(`UPDATE clients SET ${assignments.join(', ')}, updated_at=$${columns.length+1}
+        WHERE id=$${columns.length+2} AND archived_at IS NULL
         RETURNING id, full_name, phone, email, source, notes, created_at, updated_at`, args);
       if(result.rows[0]&&auditEnabled())await writePgPreviewAudit(scope,{action:'update',entity:'clients',entityId:target,afterImage:result.rows[0]});
       return result.rows[0] ? mapClient(result.rows[0]) : null;
