@@ -116,12 +116,17 @@ export function readR53Committed(db,{afterSequence=0,limit=MAX_BATCH,
   deny(db.isTransaction===false,'cannot read journal within another write transaction');
   db.exec('BEGIN IMMEDIATE');
   try{
+    const totals=db.prepare('SELECT COUNT(*) total,COALESCE(MAX(seq),0) latest '+
+      'FROM ox_r53_events').get();
+    deny(Number.isSafeInteger(totals.total)&&totals.total===totals.latest&&
+      totals.latest>=afterSequence&&totals.latest<=30000,
+      'journal sequence gap, corruption or future checkpoint');
     const rows=db.prepare('SELECT seq,table_name,operation,record_key,after_json '+
       'FROM ox_r53_events WHERE seq>? ORDER BY seq LIMIT ?')
       .all(afterSequence,limit+1);
-    deny(rows.length<=limit,'journal capture limit exceeded: split into smaller batches');
+    const hasMore=rows.length>limit;
     let expected=afterSequence+1,bytes=0;
-    const events=rows.map(r=>{
+    const events=rows.slice(0,limit).map(r=>{
       deny(r.seq===expected++&&items.has(r.table_name)&&
         ['upsert','delete'].includes(r.operation)&&
         typeof r.record_key==='string'&&r.record_key.length>0&&r.record_key.length<=256,
@@ -144,9 +149,16 @@ export function readR53Committed(db,{afterSequence=0,limit=MAX_BATCH,
       return event;
     });
     db.exec('COMMIT');
+    const oldest=db.prepare('SELECT committed_hint FROM ox_r53_events WHERE seq=?')
+      .get(afterSequence+1)?.committed_hint||null;
     return {format:VERSION,from:afterSequence+1,
       through:expected-1,events,schemaDigest:schema.digest,
-      trackedTables:schema.tables.length,
+      trackedTables:schema.tables.length,hasMore,
+      latestCommittedSequence:totals.latest,
+      unappliedCount:totals.latest-afterSequence,
+      oldestPendingWriteHint:oldest,
+      // SQLite strftime runs at execution time, NOT commit acknowledgement.
+      writeTimeIsCommitTime:false,
       syntheticOnly:true,productionCutoverAllowed:false};
   }catch(e){db.exec('ROLLBACK');throw e;}
 }

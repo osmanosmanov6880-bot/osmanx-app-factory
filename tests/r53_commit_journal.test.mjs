@@ -83,7 +83,7 @@ test('R5.3 manually altered journal sequence is rejected',async()=>{
     f.db.prepare('INSERT INTO clients(id,full_name,created_at,updated_at) VALUES(?,?,?,?)')
       .run(person,'Client',stamp,stamp);
     f.db.exec('UPDATE ox_r53_events SET seq=5 WHERE seq=1');
-    assert.throws(()=>readR53Committed(f.db,{syntheticOnly:true}),/missing, reordered/);
+    assert.throws(()=>readR53Committed(f.db,{syntheticOnly:true}),/missing, reordered|journal sequence gap/);
   }finally{await f.close();}
 });
 test('R5.3 cannot install capture on real database without synthetic-only opt-in',async()=>{

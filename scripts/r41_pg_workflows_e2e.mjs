@@ -123,13 +123,43 @@ async function launchFactory(dataDir,bundle,keyPath,pgUser,pgPass){
   await stopFactory(server);
   throw Error('Factory startup timed out (private server diagnostics withheld)');
 }
+async function awaitChildWithDeadline(child,timeoutMs){
+  if(child.exitCode!==null||child.signalCode!==null)
+    return {code:child.exitCode,timeout:false};
+  return new Promise(resolve=>{
+    let finished=false,timedOut=false,hardTimer=null;
+    const timer=setTimeout(()=>{
+      timedOut=true;child.kill('SIGKILL');
+      hardTimer=setTimeout(()=>finish({code:child.exitCode,timeout:true}),2500);
+    },timeoutMs);
+    function finish(value){
+      if(finished)return;
+      finished=true;clearTimeout(timer);clearTimeout(hardTimer);
+      child.removeListener('close',closed);
+      child.removeListener('error',errored);
+      resolve(value);
+    }
+    const closed=code=>finish({code,timeout:timedOut});
+    const errored=()=>finish({code:null,timeout:timedOut,error:true});
+    child.once('close',closed);child.once('error',errored);
+  });
+}
 async function stopFactory(child){
-  if(child.exitCode!==null || child.signalCode!==null)return;
+  if(child.exitCode!==null||child.signalCode!==null)return;
   child.kill('SIGTERM');
-  const result=await Promise.race([
-    new Promise(resolve=>child.once('close',resolve)),sleep(5000).then(()=>null)
-  ]);
-  if(result===null){child.kill('SIGKILL');await new Promise(resolve=>child.once('close',resolve));}
+  const result=await awaitChildWithDeadline(child,5000);
+  if(result.timeout)console.error('[CI] factory needed forced child termination');
+}
+async function closeTestHttp(server){
+  if(!server)return;
+  const closed=await new Promise(resolve=>{
+    let done=false;
+    const timer=setTimeout(()=>finish(false),3000);
+    function finish(ok){if(done)return;done=true;clearTimeout(timer);resolve(ok);}
+    try{server.close(()=>finish(true));server.closeAllConnections?.();}
+    catch{finish(false);}
+  });
+  if(!closed)console.error('[CI] test HTTP listener exceeded graceful cleanup budget');
 }
 function authRequest(base,token,csrf,cookieName='ox_studio'){
   return async (path,method='GET',body,overrideCsrf)=>{
@@ -926,14 +956,7 @@ async function main(){
         let out='',childError='';
         child.stdout.on('data',b=>{out=(out+b.toString('utf8')).slice(-12000);});
         child.stderr.on('data',b=>{childError=(childError+b.toString('utf8')).slice(-700);});
-        const exit=await Promise.race([
-          new Promise(resolve=>child.once('close',(code)=>resolve({code}))),
-          sleep(25000).then(()=>({timeout:true}))
-        ]);
-        if(exit.timeout){
-          child.kill('SIGKILL');
-          await new Promise(resolve=>child.once('close',resolve));
-        }
+        const exit=await awaitChildWithDeadline(child,25000);
         check(!exit.timeout&&exit.code===0,
           'R5.0 independent recovery process did not complete successfully');
         let detached;try{detached=JSON.parse(out);}catch{throw Error('R5.0 detached CLI did not emit JSON');}
@@ -1226,20 +1249,17 @@ async function main(){
           OX_R53_BACKUP_WITNESS_ENDPOINT:r49WitnessEndpoint,
           OX_R53_DELTA_WITNESS_ENDPOINT:r53WitnessEndpoint
         };
+        console.error('[R5.3] detached signed base and delta verification started');
         const isolatedChild=spawn(process.execPath,['ops/r53/recover.mjs'],{
           cwd:new URL('../',import.meta.url),env:detachedEnv,
           stdio:['ignore','pipe','pipe']});
         let output='',secretlessError='';
         isolatedChild.stdout.on('data',x=>{output=(output+x.toString('utf8')).slice(-12000);});
         isolatedChild.stderr.on('data',x=>{secretlessError=(secretlessError+x.toString('utf8')).slice(-600);});
-        const childExit=await Promise.race([
-          new Promise(resolve=>isolatedChild.once('close',code=>({code}))),
-          sleep(30000).then(()=>({timeout:true}))
-        ]);
-        if(childExit.timeout){
-          isolatedChild.kill('SIGKILL');
-          await new Promise(resolve=>isolatedChild.once('close',resolve));
-        }
+        const childExit=await awaitChildWithDeadline(isolatedChild,30000);
+        console.error('[R5.3] detached process code='+String(childExit.code)+
+          ' timeout='+Boolean(childExit.timeout)+
+          ' diagnostic='+secretlessError.slice(-220));
         check(!childExit.timeout&&childExit.code===0,
           'R5.3 independent signed-base and incremental restore process rejected');checks++;
         let detachedOutput;try{detachedOutput=JSON.parse(output);}
@@ -1257,6 +1277,92 @@ async function main(){
               .get(newPayment)?.amount_minor===21500,
             'R5.3 detached incrementally restored CRM transaction/financial rows differed');checks++;
         }finally{detachedDb.close();}
+        console.error('[R5.3] signed independent replay verified');
+        if(process.env.OX_R54_E2E==='YES'){
+          console.error('[R5.4] real MinIO CDC bulk and watermark test started');
+          const {runR54SyncWindow}=await import('../src/migration/r54-continuous-worker.mjs');
+          const {appendR54CheckpointEvidence,readR54CheckpointEvidence}=
+            await import('../src/migration/r54-checkpoint-evidence.mjs');
+          const localLease=join(dir,'r54-private-leases');
+          const evidence={directory:join(dir,'r54-private-journal'),
+            tenantToken,key:randomBytes(32)};
+          const insert=primary.prepare('INSERT INTO tasks(id,title,created_at,updated_at) VALUES(?,?,?,?)');
+          const batchIDs=[];
+          primary.exec('BEGIN IMMEDIATE');
+          try{
+            for(let i=0;i<275;i++){
+              const key=randomUUID();batchIDs.push(key);
+              insert.run(key,'R5.4 capture burst '+i,now,now);
+            }
+            primary.exec('COMMIT');
+          }catch(e){primary.exec('ROLLBACK');throw e;}
+          const opts={sourceDb:primary,...deltaConfig,
+            syntheticOnly:true,leaseDirectory:localLease,
+            maxBatches:1,maxOutstandingEvents:0};
+          const firstWindow=await runR54SyncWindow(opts);
+          check(firstWindow.initialSourceCommittedSequence===279&&
+            firstWindow.witnessedSequence===254&&
+            firstWindow.publishedEvents===250&&
+            firstWindow.outstandingCommittedEvents===25&&
+            firstWindow.caughtUp===false&&
+            firstWindow.alertRequired===true&&
+            firstWindow.realTransactionRpoSecondsMeasured===false,
+            'R5.4 250-event WORM page did not truthfully report 25 pending committed writes');checks++;
+          await appendR54CheckpointEvidence(evidence,firstWindow);
+          const catchup=await runR54SyncWindow({...opts,
+            maxBatches:4,verifyFullHistory:true});
+          check(catchup.publishedEvents===25&&catchup.witnessedSequence===279&&
+            catchup.outstandingCommittedEvents===0&&
+            catchup.caughtUp===true&&catchup.alertRequired===false&&
+            catchup.fullHistoryAuthenticated===true&&
+            catchup.maximumRpoSecondsCertified===null&&
+            catchup.productionCutoverAllowed===false,
+            'R5.4 restart from witness did not cover the full committed synthetic burst');checks++;
+          await appendR54CheckpointEvidence(evidence,catchup);
+          const proof=await readR54CheckpointEvidence(evidence);
+          check(proof.hmacVerified===true&&proof.recordCount===2&&
+            proof.lastWitnessedSequence===279&&proof.lastOutstanding===0&&
+            proof.externallyAnchored===false,
+            'R5.4 local evidence incorrectly certified or lost witnessed checkpoint');checks++;
+          const afterRecovery=await restoreR53Incremental({
+            baseRestoreReceipt:r53SignedBaseReceipt,
+            recoveryDirectory:join(dir,'r54-after-burst'),...deltaConfig});
+          const restoredDb=new DatabaseSync(afterRecovery.outputFile,{readOnly:true});
+          try{
+            check(afterRecovery.appliedCommittedChanges===279&&
+              restoredDb.prepare('SELECT title FROM tasks WHERE id=?')
+                .get(batchIDs[0])?.title==='R5.4 capture burst 0'&&
+              restoredDb.prepare('SELECT title FROM tasks WHERE id=?')
+                .get(batchIDs.at(-1))?.title==='R5.4 capture burst 274'&&
+              restoredDb.prepare('SELECT amount_minor FROM payments WHERE id=?')
+                .get(newPayment)?.amount_minor===21500&&
+              restoredDb.prepare('PRAGMA foreign_key_check').all().length===0,
+              'R5.4 witnessed catch-up did not restore all synthetic burst task rows');checks++;
+          }finally{restoredDb.close();}
+          // Another event is committed, then the *actual HTTP delta witness*
+          // is taken offline. Even with an existing valid S3 head, readiness
+          // must not be reported from that stale pointer alone.
+          const afterOutage=randomUUID();
+          insert.run(afterOutage,'R5.4 after witness outage',now,now);
+          const port=r53WitnessServer.address().port;
+          await new Promise(resolve=>r53WitnessServer.close(resolve));
+          let outageDenied=false;
+          try{await runR54SyncWindow({...opts,maxBatches:2});}
+          catch{outageDenied=true;}
+          check(outageDenied,'R5.4 source wrote during witness outage but publisher returned ready');checks++;
+          await new Promise((resolve,reject)=>{
+            r53WitnessServer.once('error',reject);
+            r53WitnessServer.listen(port,'127.0.0.1',()=>{
+              r53WitnessServer.removeListener('error',reject);resolve();
+            });
+          });
+          const resumed=await runR54SyncWindow({...opts,maxBatches:2});
+          check(resumed.publishedEvents===1&&resumed.witnessedSequence===280&&
+            resumed.outstandingCommittedEvents===0&&
+            resumed.caughtUp===true&&resumed.productionCutoverAllowed===false,
+            'R5.4 after-witness-outage resume did not cover the last synthetic commit');checks++;
+          console.error('[R5.4] witnessed synthetic 250+25+1 CDC recovery and degraded alert gating: PASS');
+        }
         r53Captured=final.appliedCommittedChanges;
       }finally{primary.close();}
       check(r53Captured===4,'R5.3 incremental coverage receipt missing');checks++;
@@ -1280,20 +1386,18 @@ async function main(){
       r51IndependentAuditAndSignedAlertVerified:process.env.OX_R51_E2E==='YES',
       r52FourInfrastructureOutagesAndPostBackupLossVerified:process.env.OX_R52_E2E==='YES',
       r53IncrementalCommittedReplayAndObjectLockVerified:process.env.OX_R53_E2E==='YES',
+      r54ContinuousWitnessedBatchResumeAndBacklogAlertVerified:process.env.OX_R54_E2E==='YES',
       privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));
   }finally{
+    console.error('[CI] signed CRM E2E cleanup entered');
     if(server)await stopFactory(server);
-    if(offsiteServer)await new Promise(resolve=>offsiteServer.close(resolve));
-    if(witnessServer)await new Promise(resolve=>witnessServer.close(resolve));
-    if(alertServer)await new Promise(resolve=>alertServer.close(resolve));
-    if(witness49Server)await new Promise(resolve=>witness49Server.close(resolve));
-    if(r51AnchorServer)await new Promise(resolve=>r51AnchorServer.close(resolve));
-    if(r51AlertServer)await new Promise(resolve=>r51AlertServer.close(resolve));
-    if(r53WitnessServer)await new Promise(resolve=>r53WitnessServer.close(resolve));
+    for(const httpServer of [offsiteServer,witnessServer,alertServer,witness49Server,
+      r51AnchorServer,r51AlertServer,r53WitnessServer])await closeTestHttp(httpServer);
     if(adminPool)await adminPool.end();
     await rm(dir,{recursive:true,force:true});
+    console.error('[CI] signed CRM E2E cleanup completed');
   }
 }
 try{await main();}catch(e){
