@@ -1226,6 +1226,7 @@ async function main(){
           OX_R53_BACKUP_WITNESS_ENDPOINT:r49WitnessEndpoint,
           OX_R53_DELTA_WITNESS_ENDPOINT:r53WitnessEndpoint
         };
+        console.error('[R5.3] detached signed base and delta verification started');
         const isolatedChild=spawn(process.execPath,['ops/r53/recover.mjs'],{
           cwd:new URL('../',import.meta.url),env:detachedEnv,
           stdio:['ignore','pipe','pipe']});
@@ -1240,6 +1241,9 @@ async function main(){
           isolatedChild.kill('SIGKILL');
           await new Promise(resolve=>isolatedChild.once('close',resolve));
         }
+        console.error('[R5.3] detached process code='+String(childExit.code)+
+          ' timeout='+Boolean(childExit.timeout)+
+          ' diagnostic='+secretlessError.slice(-220));
         check(!childExit.timeout&&childExit.code===0,
           'R5.3 independent signed-base and incremental restore process rejected');checks++;
         let detachedOutput;try{detachedOutput=JSON.parse(output);}
@@ -1257,7 +1261,9 @@ async function main(){
               .get(newPayment)?.amount_minor===21500,
             'R5.3 detached incrementally restored CRM transaction/financial rows differed');checks++;
         }finally{detachedDb.close();}
+        console.error('[R5.3] signed independent replay verified');
         if(process.env.OX_R54_E2E==='YES'){
+          console.error('[R5.4] real MinIO CDC bulk and watermark test started');
           const {runR54SyncWindow}=await import('../src/migration/r54-continuous-worker.mjs');
           const {appendR54CheckpointEvidence,readR54CheckpointEvidence}=
             await import('../src/migration/r54-checkpoint-evidence.mjs');
@@ -1376,7 +1382,10 @@ async function main(){
     if(witness49Server)await new Promise(resolve=>witness49Server.close(resolve));
     if(r51AnchorServer)await new Promise(resolve=>r51AnchorServer.close(resolve));
     if(r51AlertServer)await new Promise(resolve=>r51AlertServer.close(resolve));
-    if(r53WitnessServer)await new Promise(resolve=>r53WitnessServer.close(resolve));
+    if(r53WitnessServer){
+      r53WitnessServer.closeAllConnections?.();
+      await new Promise(resolve=>r53WitnessServer.close(resolve));
+    }
     if(adminPool)await adminPool.end();
     await rm(dir,{recursive:true,force:true});
   }
