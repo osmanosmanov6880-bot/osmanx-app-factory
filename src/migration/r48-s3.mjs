@@ -54,11 +54,19 @@ export function createR48S3Transport({endpoint,bucket,region,accessKey,secretKey
     deny(OBJ.test(key),'unsupported object key');
     return '/'+enc(bucket)+'/'+projectPrefix+key.split('/').map(enc).join('/');
   }
-  async function request(method,path,{query='',body=Buffer.alloc(0),immutable=false}={}){
+  async function request(method,path,{query='',body=Buffer.alloc(0),immutable=false,ifMatch=null,ifNoneMatch=false}={}){
     deny(Buffer.isBuffer(body)&&body.length<=MAX,'body exceeds archive limit');
+    deny(!ifMatch||(
+      typeof ifMatch==='string'&&/^"[a-fA-F0-9-]{1,128}"$/.test(ifMatch)&&
+      !immutable&&!ifNoneMatch),
+      'invalid conditional ETag for S3 pointer');
+    deny(!ifNoneMatch||(!immutable&&!ifMatch),
+      'conflicting S3 pointer creation conditions');
+    const conditions=immutable||ifNoneMatch?{'if-none-match':'*'}:
+      ifMatch?{'if-match':ifMatch}:{};
     const host=url.host;
     const headers=signR48S3Request({method,path,query,body,host,region,accessKey,secretKey,
-      sessionToken,headers:immutable?{'if-none-match':'*'}:{}});
+      sessionToken,headers:conditions});
     return new Promise((resolve,reject)=>{
       const request=agent.request({protocol:url.protocol,hostname:url.hostname,port:url.port,
         method,path:path+(query?'?'+query:''),headers,timeout:15000,maxHeaderSize:8192},res=>{
@@ -73,16 +81,32 @@ export function createR48S3Transport({endpoint,bucket,region,accessKey,secretKey
       request.end(body);
     });
   }
+  async function getWithMetadata(key){
+    const result=await request('GET',location(key));
+    deny(result.status===200,'GET status '+result.status);
+    const etag=String(result.responseHeaders?.etag||'');
+    deny(/^"[a-fA-F0-9-]{1,128}"$/.test(etag),
+      'S3 GET missing a usable strong ETag');
+    return {body:result.body,etag,
+      versionId:result.responseHeaders?.['x-amz-version-id']||null};
+  }
   async function get(key){
     const result=await request('GET',location(key));
     deny(result.status===200,'GET status '+result.status);
     return result.body;
   }
-  async function put(key,data){
+  async function put(key,data,{ifMatch=null,ifNoneMatch=false}={}){
     deny(Buffer.isBuffer(data)&&data.length>0&&data.length<=MAX,
       'encrypted object bytes required');
     const isImmutable=key!=='head.json'&&key!=='r53/head.json';
-    const out=await request('PUT',location(key),{body:data,immutable:isImmutable});
+    deny((!ifMatch&&!ifNoneMatch)||key==='r53/head.json',
+      'conditional writes only permitted for incremental CDC pointer');
+    const out=await request('PUT',location(key),{
+      body:data,immutable:isImmutable,ifMatch,ifNoneMatch
+    });
+    if(key==='r53/head.json'&&(ifMatch||ifNoneMatch)&&
+      [409,412].includes(out.status))
+      throw Error('R4.8 S3 denied: conditional CDC pointer compare-and-swap conflict');
     if(isImmutable&&out.status===412){
       const previous=await get(key);
       try{deny(previous.equals(data),'immutable object key reused for different content');}
@@ -127,6 +151,6 @@ export function createR48S3Transport({endpoint,bucket,region,accessKey,secretKey
       retentionUntil:new Date(until).toISOString(),versionId:hdr['x-amz-version-id'],versioned:true,
       productionCutoverAllowed:false};
   }
-  return Object.freeze({put,get,assertBucketControls,inspectR49Worm,transport:'s3-sigv4-v1',
+  return Object.freeze({put,get,getWithMetadata,assertBucketControls,inspectR49Worm,transport:'s3-sigv4-v1',
     syntheticLoopbackOnly:loopback});
 }
