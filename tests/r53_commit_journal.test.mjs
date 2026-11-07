@@ -92,3 +92,18 @@ test('R5.3 cannot install capture on real database without synthetic-only opt-in
     assert.throws(()=>readR53Committed(f.db),/synthetic fixture/);
   }finally{await f.close();}
 });
+
+test('R5.3 journal reads and installation cannot nest inside an active SQLite write',async()=>{
+  const f=await fixture();
+  try{
+    f.db.exec('BEGIN IMMEDIATE');
+    assert.throws(()=>installR53Capture(f.db,{syntheticOnly:true}),
+      /active business transaction/);
+    f.db.exec('ROLLBACK');
+    installR53Capture(f.db,{syntheticOnly:true});
+    f.db.exec('BEGIN IMMEDIATE');
+    assert.throws(()=>readR53Committed(f.db,{syntheticOnly:true}),
+      /within another write transaction/);
+    f.db.exec('ROLLBACK');
+  }finally{await f.close();}
+});
