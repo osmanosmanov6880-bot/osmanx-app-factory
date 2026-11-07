@@ -43,7 +43,7 @@ export function inspectR53Schema(db){
 }
 export function installR53Capture(db,{syntheticOnly=false}={}){
   deny(syntheticOnly===true,'installation permitted only on isolated synthetic SQLite');
-  deny(!db.inTransaction,'cannot install capture inside an active business transaction');
+  deny(db.isTransaction===false,'cannot install capture inside an active business transaction');
   const schema=inspectR53Schema(db);
   db.exec('BEGIN IMMEDIATE');
   try{
@@ -89,7 +89,7 @@ export function readR53Committed(db,{afterSequence=0,limit=MAX_BATCH,
   const stored=db.prepare("SELECT value FROM ox_r53_meta WHERE key='schema'").get();
   deny(stored?.value===schema.digest,'journal schema drift or missing installation');
   const items=new Map(schema.tables.map(t=>[t.table,t]));
-  deny(!db.inTransaction,'cannot read journal within another write transaction');
+  deny(db.isTransaction===false,'cannot read journal within another write transaction');
   db.exec('BEGIN IMMEDIATE');
   try{
     const rows=db.prepare('SELECT seq,table_name,operation,record_key,after_json '+
