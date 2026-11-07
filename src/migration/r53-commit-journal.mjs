@@ -41,6 +41,42 @@ export function inspectR53Schema(db){
   const digest=createHash('sha256').update(JSON.stringify(list)).digest('hex');
   return {format:VERSION,digest,tables:list};
 }
+function triggerStatements(schema){
+  const statements=[];
+  for(const item of schema.tables){
+    const table=qi(item.table),key=qi(item.key);
+    const json=item.columns.flatMap(c=>["'"+c.name+"'",'NEW.'+qi(c.name)]).join(',');
+    for(const [name,op,values] of [
+      ['insert','upsert','NEW.'+key+',json_object('+json+')'],
+      ['update','upsert','NEW.'+key+',json_object('+json+')'],
+      ['delete','delete','OLD.'+key+',NULL']
+    ]){
+      const triggerName='ox_r53_'+item.table+'_'+name;
+      const sql='CREATE TRIGGER IF NOT EXISTS '+qi(triggerName)+
+        ' AFTER '+name.toUpperCase()+' ON '+table+' BEGIN '+
+        'INSERT INTO ox_r53_events(table_name,operation,record_key,after_json)'+
+        " VALUES ('"+item.table+"','"+op+"',"+values+'); END;';
+      statements.push({name:triggerName,sql});
+    }
+  }
+  return statements;
+}
+function normalizedTriggerSql(sql){
+  return String(sql).replace(/\s+IF NOT EXISTS\b/gi,'')
+    .replace(/\s+/g,' ').trim().replace(/;$/,'').trim();
+}
+function validateTriggerIntegrity(db,schema){
+  const expected=triggerStatements(schema);
+  const found=db.prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger' "+
+    "AND name GLOB 'ox_r53_*' ORDER BY name").all();
+  deny(found.length===expected.length,
+    'missing or additional CDC trigger; committed writes may be uncaptured');
+  const known=new Map(expected.map(t=>[t.name,normalizedTriggerSql(t.sql)]));
+  deny(found.every(t=>known.has(t.name)&&
+    normalizedTriggerSql(t.sql)===known.get(t.name)),
+    'CDC trigger SQL was changed; cannot trust committed event coverage');
+}
+
 export function installR53Capture(db,{syntheticOnly=false}={}){
   deny(syntheticOnly===true,'installation permitted only on isolated synthetic SQLite');
   deny(db.isTransaction===false,'cannot install capture inside an active business transaction');
@@ -58,21 +94,8 @@ export function installR53Capture(db,{syntheticOnly=false}={}){
     deny(!hash||hash===schema.digest,'schema changed after capture installation');
     if(!hash)db.prepare("INSERT INTO ox_r53_meta(key,value) VALUES('schema',?)")
       .run(schema.digest);
-    for(const item of schema.tables){
-      const table=qi(item.table),key=qi(item.key);
-      const json=item.columns.flatMap(c=>["'"+c.name+"'",'NEW.'+qi(c.name)]).join(',');
-      for(const [name,op,values] of [
-        ['insert','upsert','NEW.'+key+',json_object('+json+')'],
-        ['update','upsert','NEW.'+key+',json_object('+json+')'],
-        ['delete','delete','OLD.'+key+',NULL']
-      ]){
-        const trigger=qi('ox_r53_'+item.table+'_'+name);
-        db.exec('CREATE TRIGGER IF NOT EXISTS '+trigger+' AFTER '+name.toUpperCase()+
-          ' ON '+table+' BEGIN '+
-          'INSERT INTO ox_r53_events(table_name,operation,record_key,after_json)'+
-          " VALUES ('"+item.table+"','"+op+"',"+values+'); END;');
-      }
-    }
+    for(const trigger of triggerStatements(schema))db.exec(trigger.sql);
+    validateTriggerIntegrity(db,schema);
     db.exec('COMMIT');
   }catch(e){db.exec('ROLLBACK');throw e;}
   return {format:VERSION,installed:true,schemaDigest:schema.digest,
@@ -88,6 +111,7 @@ export function readR53Committed(db,{afterSequence=0,limit=MAX_BATCH,
   const schema=inspectR53Schema(db);
   const stored=db.prepare("SELECT value FROM ox_r53_meta WHERE key='schema'").get();
   deny(stored?.value===schema.digest,'journal schema drift or missing installation');
+  validateTriggerIntegrity(db,schema);
   const items=new Map(schema.tables.map(t=>[t.table,t]));
   deny(db.isTransaction===false,'cannot read journal within another write transaction');
   db.exec('BEGIN IMMEDIATE');
