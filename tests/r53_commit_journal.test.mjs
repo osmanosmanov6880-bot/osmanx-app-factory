@@ -107,3 +107,15 @@ test('R5.3 journal reads and installation cannot nest inside an active SQLite wr
     f.db.exec('ROLLBACK');
   }finally{await f.close();}
 });
+
+test('R5.3 dropping or substituting a CDC trigger fails closed before upload',async()=>{
+  const f=await fixture();try{
+    installR53Capture(f.db,{syntheticOnly:true});
+    f.db.exec('DROP TRIGGER "ox_r53_tasks_insert"');
+    assert.throws(()=>readR53Committed(f.db,{syntheticOnly:true}),
+      /missing or additional CDC trigger/);
+    f.db.exec('CREATE TRIGGER "ox_r53_tasks_insert" AFTER INSERT ON tasks BEGIN SELECT 1; END;');
+    assert.throws(()=>readR53Committed(f.db,{syntheticOnly:true}),
+      /CDC trigger SQL was changed/);
+  }finally{await f.close();}
+});
