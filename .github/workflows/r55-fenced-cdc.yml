@@ -1,0 +1,167 @@
+name: R5.5 independently fenced CDC, conditional S3 and lost witness ACK PostgreSQL 15 16
+on:
+  push:
+    branches: ['feat/r55-fenced-cdc-reconciliation', main]
+    paths: ['src/migration/**', 'ops/r49/**', 'ops/r50/**', 'ops/r51/**', 'ops/r52/**', 'ops/r53/**', 'ops/r54/**', 'ops/r55/**', 'scripts/r41_pg_workflows_e2e.mjs', 'tests/r49_*.test.mjs', 'tests/r50_*.test.mjs', 'tests/r51_*.test.mjs', 'tests/r52_*.test.mjs', 'tests/r53_*.test.mjs', 'tests/r54_*.test.mjs', 'tests/r55_*.test.mjs', 'package.json', '.github/workflows/r55-fenced-cdc.yml']
+  pull_request:
+    paths: ['src/migration/**', 'ops/r49/**', 'ops/r50/**', 'ops/r51/**', 'ops/r52/**', 'ops/r53/**', 'ops/r54/**', 'ops/r55/**', 'scripts/r41_pg_workflows_e2e.mjs', 'tests/r49_*.test.mjs', 'tests/r50_*.test.mjs', 'tests/r51_*.test.mjs', 'tests/r52_*.test.mjs', 'tests/r53_*.test.mjs', 'tests/r54_*.test.mjs', 'tests/r55_*.test.mjs', 'package.json', '.github/workflows/r55-fenced-cdc.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: r55-fenced-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  minio-worm-dr:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15', '16']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r49-ci-synthetic-only
+          POSTGRES_DB: ox_test_factory_r40
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_test_factory_r40"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r49-ci-synthetic-only
+      PGDATABASE: ox_test_factory_r40
+      PGSSLMODE: disable
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R43_E2E: 'YES'
+      OX_R44_E2E: 'YES'
+      OX_R45_E2E: 'YES'
+      OX_R46_E2E: 'YES'
+      OX_R47_E2E: 'YES'
+      OX_R48_E2E: 'YES'
+      OX_R49_E2E: 'YES'
+      OX_R50_E2E: 'YES'
+      OX_R51_E2E: 'YES'
+      OX_R52_E2E: 'YES'
+      OX_R53_E2E: 'YES'
+      OX_R54_E2E: 'YES'
+      OX_R55_E2E: 'YES'
+      OX_R49_S3_ENDPOINT: 'http://127.0.0.1:9000/'
+      OX_R49_S3_BUCKET: 'r49-synthetic-worm'
+      OX_R49_S3_REGION: 'us-east-1'
+      OX_R49_S3_ACCESS_KEY: 'R49CIACCESS01'
+      OX_R49_S3_SECRET_KEY: 'R49_SYNTHETIC_ONLY_NO_REAL_CREDENTIALS_2026'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install app and PostgreSQL client
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE"
+      - name: Start actual S3-compatible MinIO instance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/r49-minio-data"
+          # Run as the host directory owner: source-built image uses a non-root
+          # default UID incompatible with the runner-owned bind mount.
+          chmod 0700 "$RUNNER_TEMP/r49-minio-data"
+          docker run -d --name r49-minio-ci -p 127.0.0.1:9000:9000 \
+            --user "$(id -u):$(id -g)" \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            -e MINIO_ROOT_USER="$OX_R49_S3_ACCESS_KEY" \
+            -e MINIO_ROOT_PASSWORD="$OX_R49_S3_SECRET_KEY" \
+            -v "$RUNNER_TEMP/r49-minio-data:/data:rw" \
+            ghcr.io/intikhab49/minio-from-source@sha256:1025a6dd8452e6fe8d3fdf16dbce7c18f8417acd22e5abd7376d8322aee5edab
+          for attempt in $(seq 1 100); do
+            if curl --silent --fail http://127.0.0.1:9000/minio/health/live >/dev/null; then break; fi
+            sleep 1
+          done
+          if ! curl --silent --show-error --fail http://127.0.0.1:9000/minio/health/live; then
+            docker ps -a --filter name=r49-minio-ci
+            docker logs --tail 120 r49-minio-ci || true
+            exit 1
+          fi
+      - name: Create a versioned, COMPLIANCE-locked synthetic bucket
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.OX_R49_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.OX_R49_S3_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_EC2_METADATA_DISABLED: 'true'
+          AWS_PAGER: ''
+        run: |
+          set -euo pipefail
+          aws --version
+          aws --endpoint-url http://127.0.0.1:9000 s3api create-bucket \
+            --bucket "$OX_R49_S3_BUCKET" --object-lock-enabled-for-bucket
+          aws --endpoint-url http://127.0.0.1:9000 s3api put-object-lock-configuration \
+            --bucket "$OX_R49_S3_BUCKET" \
+            --object-lock-configuration '{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"COMPLIANCE","Days":7}}}'
+          aws --endpoint-url http://127.0.0.1:9000 s3api get-object-lock-configuration \
+            --bucket "$OX_R49_S3_BUCKET"
+          aws --endpoint-url http://127.0.0.1:9000 s3api get-bucket-versioning \
+            --bucket "$OX_R49_S3_BUCKET"
+      - name: Operational recovery, evidence signatures and all ancestor regressions
+        run: |
+          npm run test:r55
+          npm run test:r54
+          npm run test:r53
+          npm run test:r52
+          npm run test:r51
+          npm run test:r50
+          npm run test:r49
+          npm run test:r48
+          npm run test:r47
+          npm run test:r46
+          npm run test:r45
+          npm run test:r44
+          npm run test:r43
+          npm run test:r42
+          npm run test:r41
+          npm run test:r40
+          node --check scripts/r41_pg_workflows_e2e.mjs
+          node --check ops/r49/recover.mjs
+          node --check src/migration/r50-drill.mjs
+          node --check ops/r50/verify-reviews.mjs
+          node --check src/migration/r51-readiness.mjs
+          node --check ops/r51/verify.mjs
+          node --check src/migration/r52-failure-matrix.mjs
+          node --check ops/r52/verify-report.mjs
+          node --check src/migration/r53-commit-journal.mjs
+          node --check src/migration/r53-incremental.mjs
+          node --check src/migration/r53-replay.mjs
+          node --check ops/r53/recover.mjs
+          node --check src/migration/r54-continuous-worker.mjs
+          node --check src/migration/r54-checkpoint-evidence.mjs
+          node --check ops/r54/worker.mjs
+          node --check src/migration/r55-fence.mjs
+          node --check src/migration/r55-reconcile.mjs
+          node --check src/migration/r55-commit-latency.mjs
+          node --check ops/r55/fence-server.mjs
+      - name: Signed PG CRM, real S3 fenced CAS, lost witness ACK repair and synthetic commit delay
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          timeout -k 5s 540s node scripts/r41_pg_workflows_e2e.mjs --confirm-synthetic | tee artifacts/r55-pg-${{ matrix.postgres }}.json
+      - name: Upload synthetic-only acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r55-fenced-pg-${{ matrix.postgres }}
+          path: artifacts/r55-pg-${{ matrix.postgres }}.json
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: Stop disposable MinIO server
+        if: always()
+        run: docker rm -f r49-minio-ci || true

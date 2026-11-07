@@ -56,6 +56,9 @@ const r53WitnessKey=randomBytes(32).toString('hex');
 const r53WitnessBearer=randomBytes(32).toString('hex');
 const r53DeltaKey=randomBytes(32).toString('hex');
 let r53WitnessEndpoint='';
+const r55FenceKey=randomBytes(32).toString('hex');
+const r55FenceBearer=randomBytes(32).toString('hex');
+let r55FenceEndpoint='';
 let r46NextKeyActive=false;
 function check(ok,message) {if(!ok)throw Error(message);}
 function guard(){
@@ -224,7 +227,7 @@ async function main(){
   // The driver is loaded only in explicitly enabled test/runtime contexts.
   const {Pool}=await import('pg');
   const dir=await mkdtemp(join(tmpdir(),'ox-r40-http-'));
-  let server,adminPool,offsiteServer,witnessServer,alertServer,witness49Server,r51AnchorServer,r51AlertServer,r53WitnessServer;
+  let server,adminPool,offsiteServer,witnessServer,alertServer,witness49Server,r51AnchorServer,r51AlertServer,r53WitnessServer,r55FenceServer;
   const alertReceived=[];
   try{
     if(process.env.OX_R47_E2E==='YES'){
@@ -286,6 +289,15 @@ async function main(){
         token:r53WitnessBearer,secret:Buffer.from(r53WitnessKey,'hex')}));
       await new Promise(resolve=>r53WitnessServer.listen(0,'127.0.0.1',resolve));
       r53WitnessEndpoint='http://127.0.0.1:'+r53WitnessServer.address().port+'/';
+    }
+    if(process.env.OX_R55_E2E==='YES'){
+      const {createR55FenceReceiver}=await import('../src/migration/r55-fence.mjs');
+      r55FenceServer=createHttpServer(createR55FenceReceiver({
+        root:join(dir,'r55-separate-fencing-authority'),
+        token:r55FenceBearer,secret:Buffer.from(r55FenceKey,'hex')
+      }));
+      await new Promise(resolve=>r55FenceServer.listen(0,'127.0.0.1',resolve));
+      r55FenceEndpoint='http://127.0.0.1:'+r55FenceServer.address().port+'/';
     }
     const dataDir=join(dir,'data');const bundle=join(dir,'signed-export');
     await mkdir(join(dataDir,'projects'),{recursive:true,mode:0o700});
@@ -1363,6 +1375,116 @@ async function main(){
             'R5.4 after-witness-outage resume did not cover the last synthetic commit');checks++;
           console.error('[R5.4] witnessed synthetic 250+25+1 CDC recovery and degraded alert gating: PASS');
         }
+        if(process.env.OX_R55_E2E==='YES'){
+          console.error('[R5.5] real MinIO fenced-CAS and orphan witness replay began');
+          const {createR55FenceClient}=await import('../src/migration/r55-fence.mjs');
+          const {runR55FencedPublisher}=await import('../src/migration/r55-reconcile.mjs');
+          const {commitR55SyntheticTransaction,measureR55SyntheticWitnessDelay,
+            summarizeR55SyntheticDelays}=await import('../src/migration/r55-commit-latency.mjs');
+          const authority=createR55FenceClient({
+            endpoint:r55FenceEndpoint,token:r55FenceBearer,
+            secret:Buffer.from(r55FenceKey,'hex'),
+            tenant:tenantToken,allowSyntheticLoopback:true
+          });
+          const holderA='a'.repeat(24),holderB='b'.repeat(24);
+          const pinned=await authority.acquire(holderA,{ttlMs:10000});
+          let secondDenied=false;
+          try{await authority.acquire(holderB,{ttlMs:10000});}
+          catch(e){secondDenied=/authority denied 409/.test(e.message);}
+          check(secondDenied&&pinned.epoch===1,
+            'R5.5 independently signed remote lease granted two simultaneous publishers');checks++;
+          await authority.release(pinned);
+          const publish=(holder,witnessTarget=witness)=>runR55FencedPublisher({
+            sourceDb:primary,...deltaConfig,authority,
+            witness:witnessTarget,holder,ttlMs:20000,syntheticOnly:true
+          });
+          const commitRecord=title=>commitR55SyntheticTransaction({
+            sourceDb:primary,syntheticOnly:true,
+            transaction(db){
+              db.prepare('INSERT INTO tasks(id,title,created_at,updated_at) VALUES(?,?,?,?)')
+                .run(randomUUID(),title,now,now);
+            }
+          });
+          const firstAck=commitRecord('R5.5 acknowledged after SQLite COMMIT');
+          check(firstAck.acknowledgedSequence===281&&
+            firstAck.acknowledgmentIsDurableRemoteReplication===false,
+            'R5.5 local client ACK incorrectly implied offsite witness');checks++;
+          const firstPublished=await publish(holderA);
+          check(firstPublished.checkpointSequence===281&&
+            firstPublished.publishedEvents===1&&
+            firstPublished.conditionalS3HeadRequired===true&&
+            firstPublished.remoteFencingVerified===true&&
+            firstPublished.productionCutoverAllowed===false,
+            'R5.5 real MinIO S3 HEAD conditional If-Match and remote fencing were not enforced');checks++;
+          const latency=measureR55SyntheticWitnessDelay({
+            marker:firstAck,publication:firstPublished,syntheticOnly:true});
+          const delaySummary=summarizeR55SyntheticDelays([latency],{maxObservedMs:30000});
+          check(delaySummary.sampleCount===1&&
+            delaySummary.observedBudgetMet===true&&
+            delaySummary.zeroRpoCertified===false&&
+            latency.realTransactionRpoSecondsMeasured===false,
+            'R5.5 synthetic commit-to-witness duration not observed honestly');checks++;
+          // A stale worker may have read the old ETag before a real other
+          // worker commits a newer HEAD. Its conditional S3 write must fail.
+          const oldPointer=await remote.getWithMetadata('r53/head.json');
+          const secondAck=commitRecord('R5.5 segment published but ACK lost BEFORE commit');
+          check(secondAck.acknowledgedSequence===282,
+            'R5.5 second synthetic commit not captured');checks++;
+          const precommitLost={...witness,commit:async()=>{throw Error('R5.5 injected independent witness outage before persistence');}};
+          let orphanDenied=false;
+          try{await publish(holderA,precommitLost);}
+          catch(e){orphanDenied=/injected independent witness outage/.test(e.message);}
+          check(orphanDenied&&(await witness.current()).entries===281,
+            'R5.5 orphan S3 pointer incorrectly advanced independent witness');checks++;
+          const repaired=await publish(holderB);
+          check(repaired.reconciliation.recoveredOrphan===true&&
+            repaired.reconciliation.authenticatedS3AndLocalEventsCompared===true&&
+            repaired.checkpointSequence===282&&repaired.publishedEvents===0,
+            'R5.5 cannot reconcile full encrypted orphan against local SQLite journal');checks++;
+          const latestPointer=await remote.getWithMetadata('r53/head.json');
+          let staleS3Denied=false;
+          try{await remote.put('r53/head.json',oldPointer.body,{
+            ifMatch:oldPointer.etag
+          });}
+          catch(e){staleS3Denied=/conditional CDC pointer compare-and-swap conflict/.test(e.message);}
+          check(staleS3Denied&&
+            (await remote.getWithMetadata('r53/head.json')).etag===latestPointer.etag,
+            'R5.5 real MinIO accepted a stale If-Match object overwrite');checks++;
+          // Independent witness actually committed, but HTTP response was
+          // dropped; a new publisher sees already-witnessed and writes nothing.
+          const thirdAck=commitRecord('R5.5 witness reply lost AFTER committed');
+          check(thirdAck.acknowledgedSequence===283,
+            'R5.5 third synthetic commit not captured');checks++;
+          const postcommitLost={...witness,commit:async options=>{
+            await witness.commit(options);
+            throw Error('R5.5 injected HTTP reply loss after commit');
+          }};
+          let lostReply=false;
+          try{await publish(holderA,postcommitLost);}
+          catch(e){lostReply=/injected HTTP reply loss/.test(e.message);}
+          check(lostReply&&(await witness.current()).entries===283,
+            'R5.5 lost reply scenario failed to commit independently');checks++;
+          const idempotent=await publish(holderB);
+          check(idempotent.reconciliation.alreadyWitnessed===true&&
+            idempotent.publishedEvents===0&&
+            idempotent.checkpointSequence===283,
+            'R5.5 retried a successfully committed witness acknowledgement');checks++;
+          const newRecovery=await restoreR53Incremental({
+            baseRestoreReceipt:r53SignedBaseReceipt,
+            recoveryDirectory:join(dir,'r55-fenced-recovered'),...deltaConfig
+          });
+          const r55Db=new DatabaseSync(newRecovery.outputFile,{readOnly:true});
+          try{
+            check(newRecovery.appliedCommittedChanges===283&&
+              r55Db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE title LIKE ?')
+                .get('R5.5%').n===3&&
+              r55Db.prepare('SELECT amount_minor FROM payments WHERE id=?')
+                .get(newPayment)?.amount_minor===21500&&
+              r55Db.prepare('PRAGMA foreign_key_check').all().length===0,
+              'R5.5 signed synthetic recovery did not contain all post-backup commits');checks++;
+          }finally{r55Db.close();}
+          console.error('[R5.5] real MinIO conditional S3 CAS, fenced multiworker, lost ACK before/after witness and 283-event replay: PASS');
+        }
         r53Captured=final.appliedCommittedChanges;
       }finally{primary.close();}
       check(r53Captured===4,'R5.3 incremental coverage receipt missing');checks++;
@@ -1387,6 +1509,7 @@ async function main(){
       r52FourInfrastructureOutagesAndPostBackupLossVerified:process.env.OX_R52_E2E==='YES',
       r53IncrementalCommittedReplayAndObjectLockVerified:process.env.OX_R53_E2E==='YES',
       r54ContinuousWitnessedBatchResumeAndBacklogAlertVerified:process.env.OX_R54_E2E==='YES',
+      r55RemoteFencingConditionalS3AndLostAckRecoveredVerified:process.env.OX_R55_E2E==='YES',
       privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));
@@ -1394,7 +1517,7 @@ async function main(){
     console.error('[CI] signed CRM E2E cleanup entered');
     if(server)await stopFactory(server);
     for(const httpServer of [offsiteServer,witnessServer,alertServer,witness49Server,
-      r51AnchorServer,r51AlertServer,r53WitnessServer])await closeTestHttp(httpServer);
+      r51AnchorServer,r51AlertServer,r53WitnessServer,r55FenceServer])await closeTestHttp(httpServer);
     if(adminPool)await adminPool.end();
     await rm(dir,{recursive:true,force:true});
     console.error('[CI] signed CRM E2E cleanup completed');

@@ -63,13 +63,19 @@ function decodeHead(info,bytes){
 }
 async function remoteHead(info){
   let bytes;
-  try{bytes=await info.remote.get(HEAD_KEY);}
+  let etag=null;
+  try{
+    if(typeof info.remote.getWithMetadata==='function'){
+      const item=await info.remote.getWithMetadata(HEAD_KEY);
+      bytes=item.body;etag=item.etag;
+    }else bytes=await info.remote.get(HEAD_KEY);
+  }
   catch(e){
     if(String(e.message)==='R4.8 S3 denied: GET status 404')return null;
     throw e;
   }
   const value=decodeHead(info,bytes);
-  return {bytes,value,sha256:sha(bytes)};
+  return {bytes,value,sha256:sha(bytes),etag};
 }
 async function checkHead(info){
   const head=await remoteHead(info),anchor=await info.witness.current();
@@ -148,7 +154,7 @@ export function r53WitnessTenant(catalogKey,projectId){
   return createHmac('sha256',catalogKey).update('OSMANX-R53-DELTA-WITNESS-v1\0')
     .update(projectId).digest('hex').slice(0,24);
 }
-export async function publishR53Incremental({sourceDb,...arg}={}){
+export async function publishR53Incremental({sourceDb,publishFence=null,...arg}={}){
   const info=config(arg);
   deny(sourceDb&&typeof sourceDb.prepare==='function','synthetic SQLite source required');
   const bucket=await info.remote.assertBucketControls();
@@ -183,12 +189,22 @@ export async function publishR53Incremental({sourceDb,...arg}={}){
   const pointer=encodeHead(info,{schemaDigest:captured.schemaDigest,
     segments:(prior?.value.segments||0)+1,lastSequence:captured.through,
     lastSegmentSha256:sealed.digest});
-  await info.remote.put(HEAD_KEY,pointer);
+  if(publishFence){
+    deny(typeof publishFence.assertCurrent==='function'&&
+      typeof info.remote.getWithMetadata==='function'&&
+      (prior===null||/^"[a-fA-F0-9-]{1,128}"$/.test(prior.etag||'')),
+      'fenced mode requires separate authority and S3 strong ETag CAS');
+    await publishFence.assertCurrent();
+    await info.remote.put(HEAD_KEY,pointer,prior?
+      {ifMatch:prior.etag}:{ifNoneMatch:true});
+    await publishFence.assertCurrent();
+  }else await info.remote.put(HEAD_KEY,pointer);
   const posted=await remoteHead(info);
   deny(posted?.bytes.equals(pointer),'incremental pointer changed after publication');
   const headLock=await info.remote.inspectR49Worm(HEAD_KEY);
   deny(headLock.objectLockVerified&&headLock.versionId,
     'incremental head object version lacks S3 COMPLIANCE proof');
+  if(publishFence)await publishFence.assertCurrent();
   await info.witness.commit({catalogSha256:posted.sha256,
     manifestSha256:info.vault.manifestSha256,entries:captured.through});
   await info.witness.verify({catalogSha256:posted.sha256,
@@ -262,4 +278,64 @@ export async function inspectR53WitnessedCheckpoint(arg){
     lastVerifiedSchemaDigest:head?.value.schemaDigest||null,
     productionCutoverAllowed:false
   };
+}
+
+
+// R5.5 unacknowledged remote candidate reader. This verifies HMAC,
+// AES-256-GCM, contiguous complete segment ancestry and S3 COMPLIANCE *but
+// deliberately DOES NOT trust the unanchored HEAD*. Never use this result
+// alone to declare a checkpoint or recover customer data. The R5.5
+// reconciler must compare all events with the primary journal and prove the
+// exact predecessor was independently witnessed before advancing it.
+export async function inspectR53PendingCandidate(arg){
+  const info=config(arg);
+  const latest=await remoteHead(info);
+  if(!latest)return null;
+  const pinned=await info.remote.inspectR49Worm(HEAD_KEY);
+  deny(pinned.objectLockVerified&&pinned.retentionMode==='COMPLIANCE'&&pinned.versionId,
+    'unacknowledged HEAD lacks real provider WORM protection');
+  let digest=latest.value.lastSegmentSha256,expected=latest.value.lastSequence;
+  const reversed=[],seen=new Set();
+  for(let i=0;i<latest.value.segments;i++){
+    deny(HEX.test(digest)&&digest!==ZERO&&!seen.has(digest),
+      'unacknowledged segment hash chain contains gap or cycle');
+    seen.add(digest);
+    const objectKey='r53/segments/'+digest+'.oxd';
+    const lock=await info.remote.inspectR49Worm(objectKey);
+    deny(lock.objectLockVerified&&lock.retentionMode==='COMPLIANCE'&&lock.versionId,
+      'unacknowledged segment lacks COMPLIANCE Object Lock');
+    const bytes=await info.remote.get(objectKey);
+    const chunk=decrypt(info,bytes,digest);
+    deny(chunk.throughSequence===expected&&chunk.schemaDigest===latest.value.schemaDigest,
+      'unacknowledged segment gap or schema mismatch');
+    reversed.push({...chunk,digest});
+    expected=chunk.fromSequence-1;
+    digest=chunk.previousSha256;
+    bytes.fill(0);
+  }
+  deny(expected===0&&digest===ZERO,
+    'unacknowledged stream not linked to first captured event');
+  const chunks=reversed.reverse();
+  const events=chunks.flatMap(x=>x.events);
+  deny(events.length===latest.value.lastSequence,
+    'unacknowledged stream does not contain all committed sequence entries');
+  const anchors=chunks.map((chunk,i)=>({
+    throughSequence:chunk.throughSequence,
+    catalogSha256:sha(encodeHead(info,{
+      schemaDigest:latest.value.schemaDigest,segments:i+1,
+      lastSequence:chunk.throughSequence,lastSegmentSha256:chunk.digest
+    }))
+  }));
+  deny(anchors.at(-1).catalogSha256===latest.sha256,
+    'candidate HEAD digest differs from verified encrypted chain');
+  return {format:'osmanx-r55-pending-candidate-v1',
+    events,anchors,
+    lastSequence:latest.value.lastSequence,
+    schemaDigest:latest.value.schemaDigest,
+    headSha256:latest.sha256,
+    manifestSha256:info.vault.manifestSha256,
+    s3VersionedComplianceVerified:true,
+    independentWitnessVerified:false,
+    recoverableOnlyAfterPrimaryAndWitnessComparison:true,
+    productionCutoverAllowed:false};
 }
