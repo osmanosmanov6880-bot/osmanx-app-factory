@@ -136,6 +136,7 @@ jobs:
           node --check src/migration/r53-commit-journal.mjs
           node --check src/migration/r53-incremental.mjs
           node --check src/migration/r53-replay.mjs
+          node --check ops/r53/recover.mjs
       - name: Signed PG CRM, real S3 encrypted post-backup journal, replay and tamper denials
         shell: bash
         run: |
