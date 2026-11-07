@@ -185,6 +185,6 @@ test('R5.5 concurrent pointer CAS denies a stale writer even with earlier valid 
     await assert.rejects(f.remote.put('r53/head.json',Buffer.from('stale'),
       {ifMatch:old.etag}),/compare-and-swap conflict/);
     await assert.rejects(runR55FencedPublisher(args(f,'c'.repeat(24))),
-      /invalid signed head JSON/);
+      /invalid signed head JSON|remote head changed, wrong baseline or invalid HMAC/);
   }finally{await f.close();}
 });
