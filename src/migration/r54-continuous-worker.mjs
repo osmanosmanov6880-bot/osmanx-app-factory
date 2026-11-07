@@ -129,7 +129,7 @@ export async function runR54SyncWindow({
       outstandingCommittedEvents:backlog,
       caughtUp:backlog===0,
       withinSequenceBudget,withinWriteHintBudget,
-      oldestPendingWriteHintAgeMs,
+      oldestPendingWriteHintAgeMs:oldestWriteHintAgeMs,
       sqliteWriteTimeIsCommitAcknowledgement:false,
       realTransactionRpoSecondsMeasured:false,
       maximumRpoSecondsCertified:null,
