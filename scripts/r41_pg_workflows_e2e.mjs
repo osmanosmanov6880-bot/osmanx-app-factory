@@ -123,13 +123,43 @@ async function launchFactory(dataDir,bundle,keyPath,pgUser,pgPass){
   await stopFactory(server);
   throw Error('Factory startup timed out (private server diagnostics withheld)');
 }
+async function awaitChildWithDeadline(child,timeoutMs){
+  if(child.exitCode!==null||child.signalCode!==null)
+    return {code:child.exitCode,timeout:false};
+  return new Promise(resolve=>{
+    let finished=false,timedOut=false,hardTimer=null;
+    const timer=setTimeout(()=>{
+      timedOut=true;child.kill('SIGKILL');
+      hardTimer=setTimeout(()=>finish({code:child.exitCode,timeout:true}),2500);
+    },timeoutMs);
+    function finish(value){
+      if(finished)return;
+      finished=true;clearTimeout(timer);clearTimeout(hardTimer);
+      child.removeListener('close',closed);
+      child.removeListener('error',errored);
+      resolve(value);
+    }
+    const closed=code=>finish({code,timeout:timedOut});
+    const errored=()=>finish({code:null,timeout:timedOut,error:true});
+    child.once('close',closed);child.once('error',errored);
+  });
+}
 async function stopFactory(child){
-  if(child.exitCode!==null || child.signalCode!==null)return;
+  if(child.exitCode!==null||child.signalCode!==null)return;
   child.kill('SIGTERM');
-  const result=await Promise.race([
-    new Promise(resolve=>child.once('close',resolve)),sleep(5000).then(()=>null)
-  ]);
-  if(result===null){child.kill('SIGKILL');await new Promise(resolve=>child.once('close',resolve));}
+  const result=await awaitChildWithDeadline(child,5000);
+  if(result.timeout)console.error('[CI] factory needed forced child termination');
+}
+async function closeTestHttp(server){
+  if(!server)return;
+  const closed=await new Promise(resolve=>{
+    let done=false;
+    const timer=setTimeout(()=>finish(false),3000);
+    function finish(ok){if(done)return;done=true;clearTimeout(timer);resolve(ok);}
+    try{server.close(()=>finish(true));server.closeAllConnections?.();}
+    catch{finish(false);}
+  });
+  if(!closed)console.error('[CI] test HTTP listener exceeded graceful cleanup budget');
 }
 function authRequest(base,token,csrf,cookieName='ox_studio'){
   return async (path,method='GET',body,overrideCsrf)=>{
@@ -926,14 +956,7 @@ async function main(){
         let out='',childError='';
         child.stdout.on('data',b=>{out=(out+b.toString('utf8')).slice(-12000);});
         child.stderr.on('data',b=>{childError=(childError+b.toString('utf8')).slice(-700);});
-        const exit=await Promise.race([
-          new Promise(resolve=>child.once('close',(code)=>resolve({code}))),
-          sleep(25000).then(()=>({timeout:true}))
-        ]);
-        if(exit.timeout){
-          child.kill('SIGKILL');
-          await new Promise(resolve=>child.once('close',resolve));
-        }
+        const exit=await awaitChildWithDeadline(child,25000);
         check(!exit.timeout&&exit.code===0,
           'R5.0 independent recovery process did not complete successfully');
         let detached;try{detached=JSON.parse(out);}catch{throw Error('R5.0 detached CLI did not emit JSON');}
@@ -1233,14 +1256,7 @@ async function main(){
         let output='',secretlessError='';
         isolatedChild.stdout.on('data',x=>{output=(output+x.toString('utf8')).slice(-12000);});
         isolatedChild.stderr.on('data',x=>{secretlessError=(secretlessError+x.toString('utf8')).slice(-600);});
-        const childExit=await Promise.race([
-          new Promise(resolve=>isolatedChild.once('close',code=>({code}))),
-          sleep(30000).then(()=>({timeout:true}))
-        ]);
-        if(childExit.timeout){
-          isolatedChild.kill('SIGKILL');
-          await new Promise(resolve=>isolatedChild.once('close',resolve));
-        }
+        const childExit=await awaitChildWithDeadline(isolatedChild,30000);
         console.error('[R5.3] detached process code='+String(childExit.code)+
           ' timeout='+Boolean(childExit.timeout)+
           ' diagnostic='+secretlessError.slice(-220));
@@ -1375,19 +1391,13 @@ async function main(){
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));
   }finally{
+    console.error('[CI] signed CRM E2E cleanup entered');
     if(server)await stopFactory(server);
-    if(offsiteServer)await new Promise(resolve=>offsiteServer.close(resolve));
-    if(witnessServer)await new Promise(resolve=>witnessServer.close(resolve));
-    if(alertServer)await new Promise(resolve=>alertServer.close(resolve));
-    if(witness49Server)await new Promise(resolve=>witness49Server.close(resolve));
-    if(r51AnchorServer)await new Promise(resolve=>r51AnchorServer.close(resolve));
-    if(r51AlertServer)await new Promise(resolve=>r51AlertServer.close(resolve));
-    if(r53WitnessServer){
-      r53WitnessServer.closeAllConnections?.();
-      await new Promise(resolve=>r53WitnessServer.close(resolve));
-    }
+    for(const httpServer of [offsiteServer,witnessServer,alertServer,witness49Server,
+      r51AnchorServer,r51AlertServer,r53WitnessServer])await closeTestHttp(httpServer);
     if(adminPool)await adminPool.end();
     await rm(dir,{recursive:true,force:true});
+    console.error('[CI] signed CRM E2E cleanup completed');
   }
 }
 try{await main();}catch(e){
