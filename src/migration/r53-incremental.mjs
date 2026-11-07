@@ -199,7 +199,9 @@ export async function publishR53Incremental({sourceDb,...arg}={}){
     publishedEvents:captured.events.length,totalCommittedEvents:captured.through,
     encryptedReadbackVerified:true,
     everyUploadedVersionWormProtected:true,witnessVerified:true,
-    pendingUnreplicatedEvents:latest.events.length>0,
+    pendingUnreplicatedEvents:latest.unappliedCount>0,
+    observedOutstandingCommittedEvents:latest.unappliedCount,
+    sourceWriteTimeIsCommitTime:false,
     signedHeadSha256:posted.sha256,schemaDigest:captured.schemaDigest,
     baselineArchiveId:info.baselineArchiveId,
     committedBeforeJournalInstallationMayBeMissing:true,
@@ -241,4 +243,23 @@ export async function readR53AuthenticatedStream(arg){
     signedHeadSha256:latest.sha256,authenticated:true,
     allVersionsWormVerified:true,independentWitnessVerified:true,
     productionCutoverAllowed:false};
+}
+
+
+// R5.4: a verified checkpoint is *only* an independently witnessed remote
+// HEAD. An unanchored mutable S3 pointer must NEVER count as acknowledged.
+export async function inspectR53WitnessedCheckpoint(arg){
+  const info=config(arg);
+  const head=await checkHead(info);
+  return {
+    format:'osmanx-r54-verified-checkpoint-v1',
+    coveredSequence:head?.value.lastSequence||0,
+    segmentCount:head?.value.segments||0,
+    headSha256:head?.sha256||null,
+    remoteWitnessVerified:Boolean(head),
+    // Zero is not proof no writes exist; caller must inspect primary journal.
+    emptyStreamIsZeroRpoEvidence:false,
+    lastVerifiedSchemaDigest:head?.value.schemaDigest||null,
+    productionCutoverAllowed:false
+  };
 }
