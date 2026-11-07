@@ -1186,6 +1186,77 @@ async function main(){
             verified.prepare('PRAGMA foreign_key_check').all().length===0,
             'R5.3 committed deltas did not survive signed replay and idempotent retry');checks++;
         }finally{verified.close();}
+        // Detached process receives NO source SQLite path. It first
+        // reconstructs an independently verified R4.9 signed/WORM base from
+        // S3, then replays the R5.3 incremental history into a new file.
+        const secretDir=join(dir,'r53-private-credentials');
+        await mkdir(secretDir,{recursive:true,mode:0o700});
+        async function privateKey(name,value){
+          const path=join(secretDir,name+'.txt');
+          await writeFile(path,value,{mode:0o600,flag:'wx'});
+          return path;
+        }
+        const baseFolder=join(dir,'r53-detached-signed-base');
+        const finalFolder=join(dir,'r53-detached-incremental');
+        const detachedEnv={
+          ...process.env,
+          OX_R40_EPHEMERAL:'YES',OX_R53_SYNTHETIC_ONLY:'YES',
+          OX_R53_LOOPBACK_TEST:'YES',
+          OX_R53_PROJECT_ID:projectA,
+          OX_R53_SIGNED_MANIFEST_SHA256:vault.manifestSha256,
+          OX_R53_SIGNED_BUNDLE_DIR:bundle,
+          OX_R53_TRUSTED_PUBLIC_KEY_FILE:keys.publicKey,
+          OX_R53_BASE_RECOVERY_DIR:baseFolder,
+          OX_R53_DELTA_RECOVERY_DIR:finalFolder,
+          OX_R53_CATALOG_KEY_FILE:await privateKey('catalog',r46CatalogKey),
+          OX_R53_DELTA_KEY_FILE:await privateKey('delta',r53DeltaKey),
+          OX_R53_BACKUP_WITNESS_KEY_FILE:await privateKey('backup-witness',r49WitnessKey),
+          OX_R53_DELTA_WITNESS_KEY_FILE:await privateKey('delta-witness',r53WitnessKey),
+          OX_R53_BACKUP_WITNESS_TOKEN_FILE:await privateKey('backup-token',r49WitnessToken),
+          OX_R53_DELTA_WITNESS_TOKEN_FILE:await privateKey('delta-token',r53WitnessBearer),
+          OX_R53_BACKUP_KEY_ID:'key_two',
+          OX_R53_BACKUP_KEY_FILE:await privateKey('active-backup',r46NewKey),
+          OX_R53_OLD_BACKUP_KEY_ID:'key_one',
+          OX_R53_OLD_BACKUP_KEY_FILE:await privateKey('prior-backup',r46OldKey),
+          OX_R53_S3_ENDPOINT:process.env.OX_R49_S3_ENDPOINT,
+          OX_R53_S3_BUCKET:process.env.OX_R49_S3_BUCKET,
+          OX_R53_S3_REGION:process.env.OX_R49_S3_REGION,
+          OX_R53_S3_ACCESS_KEY:process.env.OX_R49_S3_ACCESS_KEY,
+          OX_R53_S3_SECRET_KEY:process.env.OX_R49_S3_SECRET_KEY,
+          OX_R53_BACKUP_WITNESS_ENDPOINT:r49WitnessEndpoint,
+          OX_R53_DELTA_WITNESS_ENDPOINT:r53WitnessEndpoint
+        };
+        const isolatedChild=spawn(process.execPath,['ops/r53/recover.mjs'],{
+          cwd:new URL('../',import.meta.url),env:detachedEnv,
+          stdio:['ignore','pipe','pipe']});
+        let output='',secretlessError='';
+        isolatedChild.stdout.on('data',x=>{output=(output+x.toString('utf8')).slice(-12000);});
+        isolatedChild.stderr.on('data',x=>{secretlessError=(secretlessError+x.toString('utf8')).slice(-600);});
+        const childExit=await Promise.race([
+          new Promise(resolve=>isolatedChild.once('close',code=>({code}))),
+          sleep(30000).then(()=>({timeout:true}))
+        ]);
+        if(childExit.timeout){
+          isolatedChild.kill('SIGKILL');
+          await new Promise(resolve=>isolatedChild.once('close',resolve));
+        }
+        check(!childExit.timeout&&childExit.code===0,
+          'R5.3 independent signed-base and incremental restore process rejected');checks++;
+        let detachedOutput;try{detachedOutput=JSON.parse(output);}
+        catch{throw Error('R5.3 detached recovery JSON response malformed');}
+        check(detachedOutput.signedBaseReverified===true&&
+          detachedOutput.incremental.appliedCommittedChanges===4&&
+          detachedOutput.incremental.idempotentRetryVerified===true&&
+          detachedOutput.incremental.productionCutoverAllowed===false&&
+          detachedOutput.incremental.outputFile.startsWith(finalFolder+'/'),
+          'R5.3 detached recovery failed independent signed source or replay checks');checks++;
+        const detachedDb=new DatabaseSync(detachedOutput.incremental.outputFile,{readOnly:true});
+        try{
+          check(detachedDb.prepare('SELECT status FROM tasks WHERE id=?').get(newTask)?.status==='done'&&
+            detachedDb.prepare('SELECT amount_minor FROM payments WHERE id=?')
+              .get(newPayment)?.amount_minor===21500,
+            'R5.3 detached incrementally restored CRM transaction/financial rows differed');checks++;
+        }finally{detachedDb.close();}
         r53Captured=final.appliedCommittedChanges;
       }finally{primary.close();}
       check(r53Captured===4,'R5.3 incremental coverage receipt missing');checks++;
