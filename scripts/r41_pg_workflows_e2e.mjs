@@ -1257,6 +1257,90 @@ async function main(){
               .get(newPayment)?.amount_minor===21500,
             'R5.3 detached incrementally restored CRM transaction/financial rows differed');checks++;
         }finally{detachedDb.close();}
+        if(process.env.OX_R54_E2E==='YES'){
+          const {runR54SyncWindow}=await import('../src/migration/r54-continuous-worker.mjs');
+          const {appendR54CheckpointEvidence,readR54CheckpointEvidence}=
+            await import('../src/migration/r54-checkpoint-evidence.mjs');
+          const localLease=join(dir,'r54-private-leases');
+          const evidence={directory:join(dir,'r54-private-journal'),
+            tenantToken,key:randomBytes(32)};
+          const insert=primary.prepare('INSERT INTO tasks(id,title,created_at,updated_at) VALUES(?,?,?,?)');
+          const batchIDs=[];
+          primary.exec('BEGIN IMMEDIATE');
+          try{
+            for(let i=0;i<275;i++){
+              const key=randomUUID();batchIDs.push(key);
+              insert.run(key,'R5.4 capture burst '+i,now,now);
+            }
+            primary.exec('COMMIT');
+          }catch(e){primary.exec('ROLLBACK');throw e;}
+          const opts={sourceDb:primary,...deltaConfig,
+            syntheticOnly:true,leaseDirectory:localLease,
+            maxBatches:1,maxOutstandingEvents:0};
+          const firstWindow=await runR54SyncWindow(opts);
+          check(firstWindow.initialSourceCommittedSequence===279&&
+            firstWindow.witnessedSequence===254&&
+            firstWindow.publishedEvents===250&&
+            firstWindow.outstandingCommittedEvents===25&&
+            firstWindow.caughtUp===false&&
+            firstWindow.alertRequired===true&&
+            firstWindow.realTransactionRpoSecondsMeasured===false,
+            'R5.4 250-event WORM page did not truthfully report 25 pending committed writes');checks++;
+          await appendR54CheckpointEvidence(evidence,firstWindow);
+          const catchup=await runR54SyncWindow({...opts,
+            maxBatches:4,verifyFullHistory:true});
+          check(catchup.publishedEvents===25&&catchup.witnessedSequence===279&&
+            catchup.outstandingCommittedEvents===0&&
+            catchup.caughtUp===true&&catchup.alertRequired===false&&
+            catchup.fullHistoryAuthenticated===true&&
+            catchup.maximumRpoSecondsCertified===null&&
+            catchup.productionCutoverAllowed===false,
+            'R5.4 restart from witness did not cover the full committed synthetic burst');checks++;
+          await appendR54CheckpointEvidence(evidence,catchup);
+          const proof=await readR54CheckpointEvidence(evidence);
+          check(proof.hmacVerified===true&&proof.recordCount===2&&
+            proof.lastWitnessedSequence===279&&proof.lastOutstanding===0&&
+            proof.externallyAnchored===false,
+            'R5.4 local evidence incorrectly certified or lost witnessed checkpoint');checks++;
+          const afterRecovery=await restoreR53Incremental({
+            baseRestoreReceipt:r53SignedBaseReceipt,
+            recoveryDirectory:join(dir,'r54-after-burst'),...deltaConfig});
+          const restoredDb=new DatabaseSync(afterRecovery.outputFile,{readOnly:true});
+          try{
+            check(afterRecovery.appliedCommittedChanges===279&&
+              restoredDb.prepare('SELECT title FROM tasks WHERE id=?')
+                .get(batchIDs[0])?.title==='R5.4 capture burst 0'&&
+              restoredDb.prepare('SELECT title FROM tasks WHERE id=?')
+                .get(batchIDs.at(-1))?.title==='R5.4 capture burst 274'&&
+              restoredDb.prepare('SELECT amount_minor FROM payments WHERE id=?')
+                .get(newPayment)?.amount_minor===21500&&
+              restoredDb.prepare('PRAGMA foreign_key_check').all().length===0,
+              'R5.4 witnessed catch-up did not restore all synthetic burst task rows');checks++;
+          }finally{restoredDb.close();}
+          // Another event is committed, then the *actual HTTP delta witness*
+          // is taken offline. Even with an existing valid S3 head, readiness
+          // must not be reported from that stale pointer alone.
+          const afterOutage=randomUUID();
+          insert.run(afterOutage,'R5.4 after witness outage',now,now);
+          const port=r53WitnessServer.address().port;
+          await new Promise(resolve=>r53WitnessServer.close(resolve));
+          let outageDenied=false;
+          try{await runR54SyncWindow({...opts,maxBatches:2});}
+          catch{outageDenied=true;}
+          check(outageDenied,'R5.4 source wrote during witness outage but publisher returned ready');checks++;
+          await new Promise((resolve,reject)=>{
+            r53WitnessServer.once('error',reject);
+            r53WitnessServer.listen(port,'127.0.0.1',()=>{
+              r53WitnessServer.removeListener('error',reject);resolve();
+            });
+          });
+          const resumed=await runR54SyncWindow({...opts,maxBatches:2});
+          check(resumed.publishedEvents===1&&resumed.witnessedSequence===280&&
+            resumed.outstandingCommittedEvents===0&&
+            resumed.caughtUp===true&&resumed.productionCutoverAllowed===false,
+            'R5.4 after-witness-outage resume did not cover the last synthetic commit');checks++;
+          console.error('[R5.4] witnessed synthetic 250+25+1 CDC recovery and degraded alert gating: PASS');
+        }
         r53Captured=final.appliedCommittedChanges;
       }finally{primary.close();}
       check(r53Captured===4,'R5.3 incremental coverage receipt missing');checks++;
@@ -1280,6 +1364,7 @@ async function main(){
       r51IndependentAuditAndSignedAlertVerified:process.env.OX_R51_E2E==='YES',
       r52FourInfrastructureOutagesAndPostBackupLossVerified:process.env.OX_R52_E2E==='YES',
       r53IncrementalCommittedReplayAndObjectLockVerified:process.env.OX_R53_E2E==='YES',
+      r54ContinuousWitnessedBatchResumeAndBacklogAlertVerified:process.env.OX_R54_E2E==='YES',
       privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));
