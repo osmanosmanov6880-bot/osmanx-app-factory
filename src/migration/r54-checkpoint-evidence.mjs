@@ -91,6 +91,11 @@ export async function appendR54CheckpointEvidence(input,cycle){
   try{
     const state=await history(info);
     deny(state.next<=MAX_RECORDS,'checkpoint history full');
+    const previous=state.records.at(-1);
+    deny(!previous||(
+      cycle.observedCommittedSequence>=previous.sourceSequence&&
+      cycle.witnessedSequence>=previous.witnessedSequence),
+      'checkpoint cursor regressed');
     const row={format:FORMAT,tenantToken:info.tenantToken,
       sequence:state.next,previousSha256:state.previous,
       sourceSequence:cycle.observedCommittedSequence,
