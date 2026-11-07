@@ -5,7 +5,7 @@ import {createHmac,createHash} from 'node:crypto';
 import https from 'node:https';
 import http from 'node:http';
 
-const OBJ=/^(?:archives\/[a-f0-9]{32}\.oxb|catalog\/[a-f0-9]{64}\.jsonl|head\.json)$/;
+const OBJ=/^(?:archives\/[a-f0-9]{32}\.oxb|catalog\/[a-f0-9]{64}\.jsonl|head\.json|r53\/head\.json|r53\/segments\/[a-f0-9]{64}\.oxd)$/;
 const BUCKET=/^(?=.{3,63}$)[a-z0-9][a-z0-9.-]*[a-z0-9]$/;
 const REGION=/^[a-z0-9-]{2,32}$/,ACCESS=/^[A-Z0-9]{8,40}$/;
 const MAX=128*1024*1024+128;
@@ -81,7 +81,7 @@ export function createR48S3Transport({endpoint,bucket,region,accessKey,secretKey
   async function put(key,data){
     deny(Buffer.isBuffer(data)&&data.length>0&&data.length<=MAX,
       'encrypted object bytes required');
-    const isImmutable=key!=='head.json';
+    const isImmutable=key!=='head.json'&&key!=='r53/head.json';
     const out=await request('PUT',location(key),{body:data,immutable:isImmutable});
     if(isImmutable&&out.status===412){
       const previous=await get(key);

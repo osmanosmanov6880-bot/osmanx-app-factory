@@ -9,7 +9,7 @@ import { createServer as createTcpListener } from 'node:net';
 import {createServer as createHttpServer} from 'node:http';
 import {createR47ObjectReceiver} from '../src/migration/r47-receiver.mjs';
 import {createR48WitnessReceiver} from '../src/migration/r48-witness.mjs';
-import { mkdtemp, mkdir, rm, rename, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, rename, readFile, writeFile, copyFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -52,6 +52,10 @@ const r51AnchorToken=randomBytes(32).toString('hex');
 const r51AlertKey=randomBytes(32).toString('hex');
 const r51AlertToken=randomBytes(32).toString('hex');
 let r51AnchorEndpoint='',r51AlertEndpoint='';
+const r53WitnessKey=randomBytes(32).toString('hex');
+const r53WitnessBearer=randomBytes(32).toString('hex');
+const r53DeltaKey=randomBytes(32).toString('hex');
+let r53WitnessEndpoint='';
 let r46NextKeyActive=false;
 function check(ok,message) {if(!ok)throw Error(message);}
 function guard(){
@@ -190,7 +194,7 @@ async function main(){
   // The driver is loaded only in explicitly enabled test/runtime contexts.
   const {Pool}=await import('pg');
   const dir=await mkdtemp(join(tmpdir(),'ox-r40-http-'));
-  let server,adminPool,offsiteServer,witnessServer,alertServer,witness49Server,r51AnchorServer,r51AlertServer;
+  let server,adminPool,offsiteServer,witnessServer,alertServer,witness49Server,r51AnchorServer,r51AlertServer,r53WitnessServer;
   const alertReceived=[];
   try{
     if(process.env.OX_R47_E2E==='YES'){
@@ -246,6 +250,13 @@ async function main(){
       await new Promise(resolve=>r51AlertServer.listen(0,'127.0.0.1',resolve));
       r51AlertEndpoint='http://127.0.0.1:'+r51AlertServer.address().port+'/';
     }
+    if(process.env.OX_R53_E2E==='YES'){
+      r53WitnessServer=createHttpServer(createR48WitnessReceiver({
+        root:join(dir,'r53-independent-delta-witness'),
+        token:r53WitnessBearer,secret:Buffer.from(r53WitnessKey,'hex')}));
+      await new Promise(resolve=>r53WitnessServer.listen(0,'127.0.0.1',resolve));
+      r53WitnessEndpoint='http://127.0.0.1:'+r53WitnessServer.address().port+'/';
+    }
     const dataDir=join(dir,'data');const bundle=join(dir,'signed-export');
     await mkdir(join(dataDir,'projects'),{recursive:true,mode:0o700});
     const studio=studioDb(join(dataDir,'studio.sqlite'));
@@ -283,7 +294,7 @@ async function main(){
     const reqA=authRequest(live.url,sA.token,sA.csrf),reqB=authRequest(live.url,sB.token,sB.csrf);
     const pathA='/api/studio/pg-preview/projects/'+projectA+'/clients';
     const pathB='/api/studio/pg-preview/projects/'+projectB+'/clients';
-    let checks=0,vaultSurvivorId,r52FaultReport,r52RecoveryFile;
+    let checks=0,vaultSurvivorId,r52FaultReport,r52RecoveryFile,r53SignedBaseReceipt;
     const requireStatus=(r,expected,label)=>{check(r.status===expected,`${label}: HTTP ${r.status}`);checks++;};
     requireStatus(await reqA('/api/studio/pg-preview/status'),200,'Preview status');
     const reconcilePath='/api/studio/pg-preview/projects/'+projectA+'/reconcile';
@@ -703,6 +714,7 @@ async function main(){
         recovery.productionCutoverAllowed===false,
         'R4.9 independently restored signed full CRM data incorrectly');checks++;
       if(process.env.OX_R52_E2E==='YES')r52RecoveryFile=recovery.outputFile;
+      if(process.env.OX_R53_E2E==='YES')r53SignedBaseReceipt=recovery;
       const recovered=crmDb(recovery.outputFile);
       try{
         check(recovered.prepare('SELECT amount_minor FROM payments').get().amount_minor===12500&&
@@ -1051,6 +1063,204 @@ async function main(){
         verified.productionCutoverAllowed===false,
         'R5.2 private disaster report distorted lost transactions or cutover status');checks++;
     }
+    if(process.env.OX_R53_E2E==='YES'){
+      const {DatabaseSync}=await import('node:sqlite');
+      const {installR53Capture,readR53Committed}=await import('../src/migration/r53-commit-journal.mjs');
+      const {publishR53Incremental,readR53AuthenticatedStream,r53WitnessTenant}=
+        await import('../src/migration/r53-incremental.mjs');
+      const {restoreR53Incremental}=await import('../src/migration/r53-replay.mjs');
+      const {createR48S3Transport}=await import('../src/migration/r48-s3.mjs');
+      const {createR48WitnessClient}=await import('../src/migration/r48-witness.mjs');
+      const {r47TenantToken}=await import('../src/migration/r47-offsite.mjs');
+      check(r53SignedBaseReceipt?.catalogWitnessVerified===true&&
+        r53SignedBaseReceipt.objectLockVerified===true&&
+        r53SignedBaseReceipt.productionCutoverAllowed===false,
+        'R5.3 requires a verified R4.9 immutable signed CRM base');checks++;
+      // A wholly isolated synthetic primary, cloned from the already signed
+      // original backup. The live factory's source SQLite is never modified.
+      const isolatedDir=join(dir,'r53-isolated-source');
+      await mkdir(isolatedDir,{recursive:true,mode:0o700});
+      const isolatedPath=join(isolatedDir,'synthetic-primary.sqlite');
+      await copyFile(r53SignedBaseReceipt.outputFile,isolatedPath);
+      await chmod(isolatedPath,0o600);
+      const primary=new DatabaseSync(isolatedPath,{enableForeignKeyConstraints:true});
+      let r53Captured=0;
+      const clientId=existingA;
+      const newTask='53535353-5353-4535-8535-535353535353';
+      const newPayment='54545454-5454-4545-8545-545454545454';
+      const deltaCatalogKey=Buffer.from(r46CatalogKey,'hex');
+      const tenantToken=r47TenantToken(deltaCatalogKey,projectA);
+      const vault={projectId:projectA,catalogKey:deltaCatalogKey,
+        manifestSha256:r53SignedBaseReceipt.format&&
+          (await verifyTrustedMigration(bundle,keys.publicKey)).manifestSha256};
+      const remote=createR48S3Transport({
+        endpoint:process.env.OX_R49_S3_ENDPOINT,
+        bucket:process.env.OX_R49_S3_BUCKET,
+        region:process.env.OX_R49_S3_REGION,
+        accessKey:process.env.OX_R49_S3_ACCESS_KEY,
+        secretKey:process.env.OX_R49_S3_SECRET_KEY,
+        projectPrefix:tenantToken+'/',allowSyntheticLoopback:true
+      });
+      const witness=createR48WitnessClient({
+        endpoint:r53WitnessEndpoint,token:r53WitnessBearer,
+        secret:Buffer.from(r53WitnessKey,'hex'),
+        tenant:r53WitnessTenant(deltaCatalogKey,projectA),
+        allowSyntheticLoopback:true
+      });
+      const deltaConfig={vault,remote,witness,
+        deltaKey:Buffer.from(r53DeltaKey,'hex'),
+        baselineArchiveId:r53SignedBaseReceipt.archiveId};
+      try{
+        const installed=installR53Capture(primary,{syntheticOnly:true});
+        check(installed.installed===true&&installed.trackedTables>=8&&
+          installed.productionCutoverAllowed===false,
+          'R5.3 atomic SQLite CDC was not installed on synthetic base');checks++;
+        primary.exec('BEGIN IMMEDIATE');
+        try{
+          primary.prepare('INSERT INTO tasks(id,title,description,status,priority,due_at,client_id,assigned_to,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+            .run(newTask,'R5.3 committed after sealed baseline','','todo','high',
+              null,clientId,staffA,managerA,now,now);
+          primary.prepare('UPDATE clients SET notes=? WHERE id=?')
+            .run('R5.3 independently recovered after checkpoint',clientId);
+          primary.prepare('INSERT INTO payments(id,client_id,amount_minor,currency,method,status,external_reference,note,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+            .run(newPayment,clientId,21500,'RUB','terminal','paid','','synthetic only',managerA,now,now);
+          primary.exec('COMMIT');
+        }catch(e){primary.exec('ROLLBACK');throw e;}
+        const committed=readR53Committed(primary,{syntheticOnly:true});
+        check(committed.events.length===3&&committed.through===3,
+          'R5.3 committed tasks, clients and payments did not enter same SQLite journal');checks++;
+        const first=await publishR53Incremental({
+          sourceDb:primary,...deltaConfig
+        });
+        check(first.publishedEvents===3&&first.encryptedReadbackVerified===true&&
+          first.everyUploadedVersionWormProtected===true&&first.witnessVerified===true&&
+          first.pendingUnreplicatedEvents===false,
+          'R5.3 encrypted delta objects were not independently witnessed or immutable');checks++;
+        const oldHead=await remote.get('r53/head.json');
+        const firstRestore=await restoreR53Incremental({
+          baseRestoreReceipt:r53SignedBaseReceipt,
+          recoveryDirectory:join(dir,'r53-replay-one'),...deltaConfig
+        });
+        check(firstRestore.appliedCommittedChanges===3&&
+          firstRestore.lostFromCoveredCommittedSequence===0&&
+          firstRestore.idempotentRetryVerified===true&&
+          firstRestore.sourceSealedBaseUnchanged===true&&
+          firstRestore.productionCutoverAllowed===false,
+          'R5.3 signed incremental changes were not replayed from old baseline');checks++;
+        const initial=new DatabaseSync(firstRestore.outputFile,{readOnly:true});
+        try{
+          check(initial.prepare('SELECT title FROM tasks WHERE id=?').get(newTask)?.title===
+            'R5.3 committed after sealed baseline'&&
+            initial.prepare('SELECT amount_minor FROM payments WHERE id=?')
+              .get(newPayment)?.amount_minor===21500&&
+            initial.prepare('SELECT notes FROM clients WHERE id=?').get(clientId)?.notes===
+              'R5.3 independently recovered after checkpoint',
+            'R5.3 restored row/financial payload differs from committed post-backup data');checks++;
+        }finally{initial.close();}
+        primary.prepare('UPDATE tasks SET status=? WHERE id=?').run('done',newTask);
+        const second=await publishR53Incremental({
+          sourceDb:primary,...deltaConfig
+        });
+        check(second.publishedEvents===1&&second.totalCommittedEvents===4,
+          'R5.3 second encrypted segment duplicated earlier changes');checks++;
+        const newestHead=await remote.get('r53/head.json');
+        await remote.put('r53/head.json',oldHead);
+        let rollbackRejected=false;
+        try{await readR53AuthenticatedStream(deltaConfig);}
+        catch(e){rollbackRejected=/older than or different from independent witness/.test(e.message);}
+        check(rollbackRejected,
+          'R5.3 rollback of older correctly encrypted S3 head bypassed delta witness');checks++;
+        await remote.put('r53/head.json',newestHead);
+        const final=await restoreR53Incremental({
+          baseRestoreReceipt:r53SignedBaseReceipt,
+          recoveryDirectory:join(dir,'r53-replay-final'),...deltaConfig
+        });
+        const verified=new DatabaseSync(final.outputFile,{readOnly:true});
+        try{
+          check(final.appliedCommittedChanges===4&&
+            final.lastCoveredSequence===4&&
+            final.lostFromCoveredCommittedSequence===0&&
+            verified.prepare('SELECT status FROM tasks WHERE id=?').get(newTask)?.status==='done'&&
+            verified.prepare('SELECT amount_minor FROM payments WHERE id=?')
+              .get(newPayment)?.amount_minor===21500&&
+            verified.prepare('PRAGMA foreign_key_check').all().length===0,
+            'R5.3 committed deltas did not survive signed replay and idempotent retry');checks++;
+        }finally{verified.close();}
+        // Detached process receives NO source SQLite path. It first
+        // reconstructs an independently verified R4.9 signed/WORM base from
+        // S3, then replays the R5.3 incremental history into a new file.
+        const secretDir=join(dir,'r53-private-credentials');
+        await mkdir(secretDir,{recursive:true,mode:0o700});
+        async function privateKey(name,value){
+          const path=join(secretDir,name+'.txt');
+          await writeFile(path,value,{mode:0o600,flag:'wx'});
+          return path;
+        }
+        const baseFolder=join(dir,'r53-detached-signed-base');
+        const finalFolder=join(dir,'r53-detached-incremental');
+        const detachedEnv={
+          ...process.env,
+          OX_R40_EPHEMERAL:'YES',OX_R53_SYNTHETIC_ONLY:'YES',
+          OX_R53_LOOPBACK_TEST:'YES',
+          OX_R53_PROJECT_ID:projectA,
+          OX_R53_SIGNED_MANIFEST_SHA256:vault.manifestSha256,
+          OX_R53_SIGNED_BUNDLE_DIR:bundle,
+          OX_R53_TRUSTED_PUBLIC_KEY_FILE:keys.publicKey,
+          OX_R53_BASE_RECOVERY_DIR:baseFolder,
+          OX_R53_DELTA_RECOVERY_DIR:finalFolder,
+          OX_R53_CATALOG_KEY_FILE:await privateKey('catalog',r46CatalogKey),
+          OX_R53_DELTA_KEY_FILE:await privateKey('delta',r53DeltaKey),
+          OX_R53_BACKUP_WITNESS_KEY_FILE:await privateKey('backup-witness',r49WitnessKey),
+          OX_R53_DELTA_WITNESS_KEY_FILE:await privateKey('delta-witness',r53WitnessKey),
+          OX_R53_BACKUP_WITNESS_TOKEN_FILE:await privateKey('backup-token',r49WitnessToken),
+          OX_R53_DELTA_WITNESS_TOKEN_FILE:await privateKey('delta-token',r53WitnessBearer),
+          OX_R53_BACKUP_KEY_ID:'key_two',
+          OX_R53_BACKUP_KEY_FILE:await privateKey('active-backup',r46NewKey),
+          OX_R53_OLD_BACKUP_KEY_ID:'key_one',
+          OX_R53_OLD_BACKUP_KEY_FILE:await privateKey('prior-backup',r46OldKey),
+          OX_R53_S3_ENDPOINT:process.env.OX_R49_S3_ENDPOINT,
+          OX_R53_S3_BUCKET:process.env.OX_R49_S3_BUCKET,
+          OX_R53_S3_REGION:process.env.OX_R49_S3_REGION,
+          OX_R53_S3_ACCESS_KEY:process.env.OX_R49_S3_ACCESS_KEY,
+          OX_R53_S3_SECRET_KEY:process.env.OX_R49_S3_SECRET_KEY,
+          OX_R53_BACKUP_WITNESS_ENDPOINT:r49WitnessEndpoint,
+          OX_R53_DELTA_WITNESS_ENDPOINT:r53WitnessEndpoint
+        };
+        const isolatedChild=spawn(process.execPath,['ops/r53/recover.mjs'],{
+          cwd:new URL('../',import.meta.url),env:detachedEnv,
+          stdio:['ignore','pipe','pipe']});
+        let output='',secretlessError='';
+        isolatedChild.stdout.on('data',x=>{output=(output+x.toString('utf8')).slice(-12000);});
+        isolatedChild.stderr.on('data',x=>{secretlessError=(secretlessError+x.toString('utf8')).slice(-600);});
+        const childExit=await Promise.race([
+          new Promise(resolve=>isolatedChild.once('close',code=>({code}))),
+          sleep(30000).then(()=>({timeout:true}))
+        ]);
+        if(childExit.timeout){
+          isolatedChild.kill('SIGKILL');
+          await new Promise(resolve=>isolatedChild.once('close',resolve));
+        }
+        check(!childExit.timeout&&childExit.code===0,
+          'R5.3 independent signed-base and incremental restore process rejected');checks++;
+        let detachedOutput;try{detachedOutput=JSON.parse(output);}
+        catch{throw Error('R5.3 detached recovery JSON response malformed');}
+        check(detachedOutput.signedBaseReverified===true&&
+          detachedOutput.incremental.appliedCommittedChanges===4&&
+          detachedOutput.incremental.idempotentRetryVerified===true&&
+          detachedOutput.incremental.productionCutoverAllowed===false&&
+          detachedOutput.incremental.outputFile.startsWith(finalFolder+'/'),
+          'R5.3 detached recovery failed independent signed source or replay checks');checks++;
+        const detachedDb=new DatabaseSync(detachedOutput.incremental.outputFile,{readOnly:true});
+        try{
+          check(detachedDb.prepare('SELECT status FROM tasks WHERE id=?').get(newTask)?.status==='done'&&
+            detachedDb.prepare('SELECT amount_minor FROM payments WHERE id=?')
+              .get(newPayment)?.amount_minor===21500,
+            'R5.3 detached incrementally restored CRM transaction/financial rows differed');checks++;
+        }finally{detachedDb.close();}
+        r53Captured=final.appliedCommittedChanges;
+      }finally{primary.close();}
+      check(r53Captured===4,'R5.3 incremental coverage receipt missing');checks++;
+    }
     const receipt={format:process.env.OX_R43_E2E==='YES'?'osmanx-r43-real-pg-shadow-acceptance':'osmanx-r42-real-pg-crm-reconciliation',success:true,syntheticOnly:true,
       pgVersionNum:version,realPostgres:true,realHttp:true,signedManifestVerified:true,
       tenantSchemas:2,rolesWithLeastPrivilege:true,forbiddenCrossTenantRequests:3,
@@ -1069,6 +1279,7 @@ async function main(){
       r50SyntheticOperationalGateAndDetachedRecoveryVerified:process.env.OX_R50_E2E==='YES',
       r51IndependentAuditAndSignedAlertVerified:process.env.OX_R51_E2E==='YES',
       r52FourInfrastructureOutagesAndPostBackupLossVerified:process.env.OX_R52_E2E==='YES',
+      r53IncrementalCommittedReplayAndObjectLockVerified:process.env.OX_R53_E2E==='YES',
       privateJournalVerified:true,postgresMutationAuditVerified:true,
       publicHttpsVerified:false,customerDataUsed:false};
     console.log(JSON.stringify(receipt,null,2));
@@ -1080,6 +1291,7 @@ async function main(){
     if(witness49Server)await new Promise(resolve=>witness49Server.close(resolve));
     if(r51AnchorServer)await new Promise(resolve=>r51AnchorServer.close(resolve));
     if(r51AlertServer)await new Promise(resolve=>r51AlertServer.close(resolve));
+    if(r53WitnessServer)await new Promise(resolve=>r53WitnessServer.close(resolve));
     if(adminPool)await adminPool.end();
     await rm(dir,{recursive:true,force:true});
   }

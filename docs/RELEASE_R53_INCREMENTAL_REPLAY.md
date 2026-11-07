@@ -1,0 +1,37 @@
+# OSMANX APP FACTORY R5.3 — atomic committed changes, encrypted incremental backups and offline replay
+
+**Engineering scope: opt-in isolated synthetic CRM.** No changes to the running factory's primary SQLite, payment processing or `main`. Production cutover is explicitly forbidden in every new receipt.
+
+## Five implemented code blocks
+
+1. **Atomic committed-change journal.** `src/migration/r53-commit-journal.mjs` installs opt-in persistent SQLite AFTER INSERT/UPDATE/DELETE triggers. Captured rows are inserted into the journal *within the same SQLite transaction*. An aborted operation leaves neither business changes nor a journal event. The journal covers the verified core CRM tables (users, clients, visits, tasks, payments, automation rules/runs, audit) and existing `custom_*` business tables with supported primary keys and columns. New unknown tables, schema changes, missing triggers and modified trigger SQL fail closed. Sessions are **deliberately excluded**, forcing re-authentication after disaster recovery. This is **not** a transaction journal for DDL, newly introduced business tables, arbitrary application side effects, or activity committed before installation.
+2. **Incremental encrypted offsite segments.** `src/migration/r53-incremental.mjs` reads only events after the latest independently witnessed sequence, limits each segment to 250 events / 1 MiB plaintext, encrypts with a dedicated AES-256-GCM key, and uploads a content-addressed segment through the existing fixed-tenant, SigV4-only S3 adapter. Every segment and current-head object version must pass the provider's COMPLIANCE Object Lock and version ID checks, with ciphertext read-back before the witness is advanced. The signed head is bound to a particular full signed archive, CRM manifest, schema digest and exact highest contiguous sequence.
+3. **Independent anti-rollback witness.** The delta stream uses a **different tenant namespace and secret key** from the original sealed-backup witness. Any older otherwise valid S3 head or missing/modified AES segment fails before replay; new head publication without witness confirmation is also rejected rather than assumed successful. The stream records the possibility of additional events committed while a remote upload is underway. Neither this nor S3 Object Lock alone prevents a compromised cloud administrator from denial-of-service.
+4. **Fresh-file, atomic, idempotent replay.** `src/migration/r53-replay.mjs` accepts the R4.9 authenticated source receipt, independently reads the signed remote sequence, authenticates and decrypts each segment, checks schema equality, and applies ordered upserts/deletions to a **new private 0600 SQLite file**. It enforces FK/SQLite integrity in a transaction and replays the whole sequence again to prove idempotence. The original signed SQLite base is checked unchanged. No automatic promotion, live payments, external service calls or PG cutover.
+5. **Detached independent recovery and true CI.** `ops/r53/recover.mjs` first obtains and verifies a **new** R4.9 signed baseline from remote S3 using the original witness and trusted Ed25519 migration bundle, then calls R5.3 replay against a *separate* incremental witness. Every cryptographic trust domain uses its own key, supplied by an operator-controlled 0600 file. PostgreSQL 15 and 16 CI use a true disposable MinIO COMPLIANCE bucket and synthetic CRM, insert task/client/payment transactions **after the sealed backup**, upload the first encrypted delta, restore the three changes, upload a second delta, reject a valid old signed pointer, and restore the complete four-event sequence. It also launches the recovery CLI as a **separate Node process without a source SQLite path**.
+
+## Isolated operator CLI
+
+Run on a **clean synthetic-only test machine**, with `OX_R40_EPHEMERAL=YES` and `OX_R53_SYNTHETIC_ONLY=YES`. Set `OX_R53_LOOPBACK_TEST=YES` only in isolated CI. Do not deploy this command as a production cron job.
+
+Supply:
+- Project and trusted signed baseline: `OX_R53_PROJECT_ID`, `OX_R53_SIGNED_MANIFEST_SHA256`, `OX_R53_SIGNED_BUNDLE_DIR`, `OX_R53_TRUSTED_PUBLIC_KEY_FILE`
+- Separate private output folders: `OX_R53_BASE_RECOVERY_DIR`, `OX_R53_DELTA_RECOVERY_DIR`
+- Four private 0600 key files: `OX_R53_CATALOG_KEY_FILE`, `OX_R53_DELTA_KEY_FILE`, `OX_R53_BACKUP_WITNESS_KEY_FILE`, `OX_R53_DELTA_WITNESS_KEY_FILE`
+- Base archive decryption ring: `OX_R53_BACKUP_KEY_ID`, `OX_R53_BACKUP_KEY_FILE`, optional `OX_R53_OLD_BACKUP_KEY_ID` and `OX_R53_OLD_BACKUP_KEY_FILE`
+- Separate witness endpoints and private token files: `OX_R53_BACKUP_WITNESS_ENDPOINT`, `OX_R53_BACKUP_WITNESS_TOKEN_FILE`, `OX_R53_DELTA_WITNESS_ENDPOINT`, `OX_R53_DELTA_WITNESS_TOKEN_FILE`
+- Fixed S3 configuration: `OX_R53_S3_ENDPOINT`, `OX_R53_S3_BUCKET`, `OX_R53_S3_REGION`, `OX_R53_S3_ACCESS_KEY`, `OX_R53_S3_SECRET_KEY`
+
+Run `node ops/r53/recover.mjs`. It returns a sanitized JSON report with both signed-base and incremental proofs, plus the new private output file. Never print the key values or give the process live production credentials. S3 credentials should ultimately come from audited short-lived IAM roles or a secret manager, not long-lived plain environment variables.
+
+## Critical limitations to production zero-RPO
+
+- The triggers are installed **only on an explicitly opted-in isolated synthetic source**. Production runtime is not yet instrumented; no complete customer transaction continuity or synchronization with an existing production backup is established.
+- Operations committed **before** trigger installation are outside the journal, and live sessions are purposely excluded. New SQLite DDL/business entities created after the baseline are not supported. Change capture is limited to supported canonical columns, with bounded batch/row sizes.
+- A verified last uploaded sequence cannot prove it covers all writes on the primary unless installation timing, journal integrity, latest source cursor, upload retry and continuous capture availability are monitored under an approved operations process. The code reports `pendingUnreplicatedEvents` and does **not** claim a production RPO.
+- Replaying validated financial rows into an isolated SQLite is not payment reconciliation with a bank or processor, and does not authorize settlement or refund execution. Independent matching and no-double-charge tests remain required.
+- No real cloud provider account, separate region/fault domain, external immutable witness anchor, real on-call alert or production restore exercise is provisioned by this PR. The CI's distinct backup and delta witness services still share a single runner.
+- Production needs tested coordination of full-backup watermark with trigger installation, durable lossless backlog replication, multi-worker upload fencing, snapshot/CDC retention overlap, schema migrations, recovery-point watermarks and an approved migration/cutover plan.
+- The old R5.2 test remains true: a **pre-capture post-backup** synthetic transaction is missing from the sealed snapshot. R5.3 proves zero missing events **within a separately initialized captured test stream**, not that this earlier lost transaction is magically recovered.
+
+**Acceptance criteria:** PostgreSQL 15 and 16 CI must each pass R4.0–R5.3 test suites and a real MinIO witnessed replay including the detached recovery CLI. All new receipts retain `productionCutoverAllowed=false`. Keep Draft PR until independent security and operations sign-off.
