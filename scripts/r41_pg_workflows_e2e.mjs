@@ -1123,7 +1123,7 @@ async function main(){
           primary.prepare('UPDATE clients SET notes=? WHERE id=?')
             .run('R5.3 independently recovered after checkpoint',clientId);
           primary.prepare('INSERT INTO payments(id,client_id,amount_minor,currency,method,status,external_reference,note,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
-            .run(newPayment,21500,'RUB','terminal','paid','','synthetic only',managerA,now,now);
+            .run(newPayment,clientId,21500,'RUB','terminal','paid','','synthetic only',managerA,now,now);
           primary.exec('COMMIT');
         }catch(e){primary.exec('ROLLBACK');throw e;}
         const committed=readR53Committed(primary,{syntheticOnly:true});
