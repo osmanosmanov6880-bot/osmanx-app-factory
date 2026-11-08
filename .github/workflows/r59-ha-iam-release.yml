@@ -1,0 +1,158 @@
+name: R5.9 real PostgreSQL promotion, MinIO role denial, certificate rotation and audit gate
+on:
+  push:
+    branches: ['feat/r59-ha-iam-rotation-audit-gate']
+    paths: ['ops/r59/**','src/migration/r59-*.mjs','src/migration/r58-mtls-coordinator.mjs','ops/r58/mtls-gateway.mjs','scripts/r59_*.mjs','tests/r59_*.test.mjs','.github/workflows/r59-ha-iam-release.yml']
+  pull_request:
+    paths: ['ops/r59/**','src/migration/r59-*.mjs','src/migration/r58-mtls-coordinator.mjs','ops/r58/mtls-gateway.mjs','scripts/r59_*.mjs','tests/r59_*.test.mjs','.github/workflows/r59-ha-iam-release.yml']
+permissions:
+  contents: read
+concurrency:
+  group: r59-ha-iam-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  synthetic-security-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+        node: ['22','24']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r59-disposable-pg
+          POSTGRES_DB: ox_r59
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_r59"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r59-disposable-pg
+      PGDATABASE: ox_r59
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R59_PG_E2E: 'YES'
+      OX_R58_PG_E2E: 'YES'
+      OX_R57_E2E: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install synthetic dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Syntax validation
+        run: |
+          node --check src/migration/r59-cert-rotation.mjs
+          node --check src/migration/r59-audit-ledger.mjs
+          node --check src/migration/r59-release-gate.mjs
+          node --check src/migration/r58-mtls-coordinator.mjs
+          node --check ops/r58/mtls-gateway.mjs
+          node --check ops/r59/check-release.mjs
+          node --check tests/r59_cert_rotation.test.mjs
+          node --check tests/r59_audit_ledger.test.mjs
+          node --check tests/r59_release_gate.test.mjs
+          node --check tests/r59_pg_promote_e2e.test.mjs
+      - name: Real mTLS rotation, immutable audit and five-authority refusal gates
+        run: |
+          node --test --test-concurrency=2 tests/r59_cert_rotation.test.mjs tests/r59_audit_ledger.test.mjs tests/r59_release_gate.test.mjs
+      - name: Inherited R5.8 PG crash, cert and S3 permission rejection
+        run: |
+          node --test --test-concurrency=2 tests/r58_pg_failure.test.mjs tests/r58_mtls_protocol.test.mjs tests/r58_incident_evidence.test.mjs tests/r58_iam_attestation.test.mjs
+  real-failover-and-provider-iam:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+    env:
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R59_LAB_ACK: 'YES'
+      OX_R59_DOCKER_FAILOVER: 'YES'
+      OX_R59_POSTGRES_VERSION: ${{ matrix.postgres }}
+      OX_R59_MINIO_ROOT: R59CIACCESS01
+      OX_R59_MINIO_SECRET: R59_DISPOSABLE_MINIO_NEVER_PRODUCTION_2026
+      OX_R59_IAM_TENANT: cccccccccccccccccccccccc
+      OX_R59_IAM_BUCKET: r59-failover-worm
+      OX_R58_WORKER_ACCESS_KEY: R59WORKER01
+      OX_R58_WORKER_SECRET_KEY: R59_ISOLATED_WORKER_SECRET_NO_PRODUCTION_2026
+      OX_R58_COORDINATOR_ACCESS_KEY: R59COORDIN01
+      OX_R58_COORDINATOR_SECRET_KEY: R59_ISOLATED_COORDINATOR_SECRET_NO_PRODUCTION_2026
+      OX_R58_PROVIDER_ROLE_E2E: 'YES'
+      OX_R58_DISPOSABLE_BUCKET_CONFIRMED: 'YES'
+      OX_R58_PROVIDER_TENANT: cccccccccccccccccccccccc
+      OX_R58_PROVIDER_BUCKET: r59-failover-worm
+      OX_R58_PROVIDER_ENDPOINT: http://127.0.0.1:9000/
+      OX_R58_PROVIDER_REGION: us-east-1
+      OX_R58_LOOPBACK_TEST: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated PostgreSQL and S3 dependencies
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          aws --version
+          docker version
+      - name: Start disposable physical primary and standby
+        shell: bash
+        run: bash ops/r59/pg-ha-lab-setup.sh
+      - name: Start pinned real MinIO and create WORM bucket
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/r59-minio-data"
+          chmod 0700 "$RUNNER_TEMP/r59-minio-data"
+          docker run -d --name minio-r59 --network ox-r59-net \
+            -p 127.0.0.1:9000:9000 \
+            --user "$(id -u):$(id -g)" \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            -e MINIO_ROOT_USER="$OX_R59_MINIO_ROOT" \
+            -e MINIO_ROOT_PASSWORD="$OX_R59_MINIO_SECRET" \
+            -v "$RUNNER_TEMP/r59-minio-data:/data:rw" \
+            ghcr.io/intikhab49/minio-from-source@sha256:1025a6dd8452e6fe8d3fdf16dbce7c18f8417acd22e5abd7376d8322aee5edab
+          for attempt in $(seq 1 100); do
+            if curl --silent --fail http://127.0.0.1:9000/minio/health/live >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --silent --show-error --fail http://127.0.0.1:9000/minio/health/live
+      - name: Enable seven-day COMPLIANCE retention
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: R59CIACCESS01
+          AWS_SECRET_ACCESS_KEY: R59_DISPOSABLE_MINIO_NEVER_PRODUCTION_2026
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_EC2_METADATA_DISABLED: 'true'
+          AWS_PAGER: ''
+        run: |
+          set -euo pipefail
+          aws --endpoint-url http://127.0.0.1:9000 s3api create-bucket \
+            --bucket r59-failover-worm --object-lock-enabled-for-bucket
+          aws --endpoint-url http://127.0.0.1:9000 s3api put-object-lock-configuration \
+            --bucket r59-failover-worm \
+            --object-lock-configuration '{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"COMPLIANCE","Days":7}}}'
+      - name: Configure real restricted MinIO worker and coordinator roles
+        shell: bash
+        run: bash ops/r59/minio-roles-lab.sh
+      - name: Verify provider denies wrong S3 PUTs with actual 403 responses
+        run: |
+          export OX_R58_WORKER_ACCESS_KEY OX_R58_WORKER_SECRET_KEY
+          export OX_R58_COORDINATOR_ACCESS_KEY OX_R58_COORDINATOR_SECRET_KEY
+          node --test tests/r58_provider_roles_e2e.test.mjs
+      - name: Kill primary, promote physical standby, reconcile persisted WORM intent
+        run: node --test tests/r59_pg_promote_e2e.test.mjs
+      - name: Remove disposable test infrastructure
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f minio-r59 pg-r59-standby pg-r59-primary || true
+          docker volume rm ox-r59-standby || true
+          docker network rm ox-r59-net || true
