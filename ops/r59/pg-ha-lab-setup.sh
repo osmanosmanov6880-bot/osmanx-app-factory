@@ -30,6 +30,12 @@ done
 docker exec pg-r59-primary pg_isready -U postgres -d ox_r59
 docker exec pg-r59-primary psql -v ON_ERROR_STOP=1 -U postgres -d ox_r59 \
   -c "CREATE ROLE r59_repl WITH REPLICATION LOGIN PASSWORD 'r59-only-disposable-repl';"
+# The official Docker image only grants local replication by default. Explicit
+# test-network replication access is needed for pg_basebackup from a container.
+docker exec pg-r59-primary bash -ec '
+  printf "\nhost replication r59_repl 0.0.0.0/0 scram-sha-256\n" >> "$PGDATA/pg_hba.conf"
+  psql -U postgres -d ox_r59 -v ON_ERROR_STOP=1 -c "SELECT pg_reload_conf()"
+'
 docker run --rm --network ox-r59-net \
   --volume ox-r59-standby:/var/lib/postgresql/data \
   --entrypoint bash "postgres:$OX_R59_POSTGRES_VERSION" -ec '
