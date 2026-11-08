@@ -115,7 +115,7 @@ test('R5.7 crash AFTER S3 success is recovered by another process against WORM v
       const fixed=await other.recover(f.tenantId);
       assert.equal(fixed.reconciled,true);
       assert.equal(fixed.committed.sha256,sha(bytes));
-      await first.release(lease);
+      await assert.rejects(first.assertCurrent(lease),/stale/);
       const second=await take(other,f.tenantId,B);
       assert.equal(second.epoch,2);await other.release(second);
     }finally{await f.close();}
