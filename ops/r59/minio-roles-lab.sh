@@ -10,25 +10,26 @@ if [[ "$OX_R58_WORKER_ACCESS_KEY" == "$OX_R58_COORDINATOR_ACCESS_KEY" ]]; then
   echo "IAM worker and coordinator must have distinct identities" >&2; exit 4
 fi
 node scripts/r59_write_iam_policies.mjs
-# The isolated MinIO instance was created in this CI job, not a shared service.
-# The container's startup shell initializes aliases, users and role policies.
-docker run --rm --network host \
-  -v "$PWD/artifacts/r59-iam:/lab:ro" \
-  -e R59_ROOT="$OX_R59_MINIO_ROOT" \
-  -e R59_ROOT_SECRET="$OX_R59_MINIO_SECRET" \
-  -e R59_WORKER="$OX_R58_WORKER_ACCESS_KEY" \
-  -e R59_WORKER_SECRET="$OX_R58_WORKER_SECRET_KEY" \
-  -e R59_COORD="$OX_R58_COORDINATOR_ACCESS_KEY" \
-  -e R59_COORD_SECRET="$OX_R58_COORDINATOR_SECRET_KEY" \
-  --entrypoint /bin/sh quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z -ec '
-    mc alias set r59 http://127.0.0.1:9000 "$R59_ROOT" "$R59_ROOT_SECRET"
-    mc admin user add r59 "$R59_WORKER" "$R59_WORKER_SECRET"
-    mc admin user add r59 "$R59_COORD" "$R59_COORD_SECRET"
-    mc admin policy create r59 r59-worker /lab/publisher.json
-    mc admin policy create r59 r59-coordinator /lab/coordinator.json
-    mc admin policy attach r59 r59-worker --user "$R59_WORKER"
-    mc admin policy attach r59 r59-coordinator --user "$R59_COORD"
-    mc admin user info r59 "$R59_WORKER"
-    mc admin user info r59 "$R59_COORD"
-  '
+# Avoid removed Docker Hub/Quay container registries. Use a pinned, standalone
+# MinIO Client release binary and verify its published SHA-256 before executing.
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+export HOME="$tmp"
+release="RELEASE.2025-08-13T08-35-41Z"
+base="https://dl.min.io/client/mc/release/linux-amd64/archive"
+binary="mc.$release"
+curl -fLSs --retry 3 "$base/$binary" -o "$tmp/$binary"
+curl -fLSs --retry 3 "$base/$binary.sha256sum" -o "$tmp/$binary.sha256sum"
+(cd "$tmp" && sha256sum -c "$binary.sha256sum")
+chmod 0500 "$tmp/$binary"
+MC="$tmp/$binary"
+"$MC" alias set r59 http://127.0.0.1:9000 "$OX_R59_MINIO_ROOT" "$OX_R59_MINIO_SECRET"
+"$MC" admin user add r59 "$OX_R58_WORKER_ACCESS_KEY" "$OX_R58_WORKER_SECRET_KEY"
+"$MC" admin user add r59 "$OX_R58_COORDINATOR_ACCESS_KEY" "$OX_R58_COORDINATOR_SECRET_KEY"
+"$MC" admin policy create r59 r59-worker "$PWD/artifacts/r59-iam/publisher.json"
+"$MC" admin policy create r59 r59-coordinator "$PWD/artifacts/r59-iam/coordinator.json"
+"$MC" admin policy attach r59 r59-worker --user "$OX_R58_WORKER_ACCESS_KEY"
+"$MC" admin policy attach r59 r59-coordinator --user "$OX_R58_COORDINATOR_ACCESS_KEY"
+"$MC" admin user info r59 "$OX_R58_WORKER_ACCESS_KEY"
+"$MC" admin user info r59 "$OX_R58_COORDINATOR_ACCESS_KEY"
 echo "R5.9 isolated MinIO IAM users and policies applied"
