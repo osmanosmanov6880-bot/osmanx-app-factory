@@ -104,12 +104,14 @@ async function dispatch(coordinator,op,payload,tenant){
   }
 }
 export function createR58MtlsHandler({
-  tenantId,coordinator,nonceStore,sharedKey,clientFingerprintSha256,now=()=>Date.now()
+  tenantId,coordinator,nonceStore,sharedKey,clientFingerprintSha256,
+  trustedClientPins=null,now=()=>Date.now()
 }={}){
   keyCheck(sharedKey,tenantId);
   deny(coordinator?.syntheticOnly===true&&nonceStore?.tenantId===tenantId&&
     typeof nonceStore.consume==='function'&&
-    HEX.test(clientFingerprintSha256||'')&&typeof now==='function',
+    (HEX.test(clientFingerprintSha256||'')||
+      typeof trustedClientPins==='function')&&typeof now==='function',
     'mTLS peer pin, durable nonce store and isolated coordinator required');
   return async function handler(req,res){
     const peer=req.socket.getPeerCertificate?.(true);
@@ -119,8 +121,18 @@ export function createR58MtlsHandler({
         'x-content-type-options':'nosniff'});
       res.end(JSON.stringify(body));
     }
+    let clientPinAccepted=false;
+    try{
+      const pins=trustedClientPins?trustedClientPins(now()):[clientFingerprintSha256];
+      deny(Array.isArray(pins)&&pins.length>=1&&pins.length<=2&&
+        pins.every(value=>HEX.test(value)),
+        'invalid signed certificate trust window');
+      clientPinAccepted=pins.some(value=>equal(fingerprint,value));
+    }catch{
+      req.resume();return reply(401,{error:'unauthorized'});
+    }
     if(req.socket.encrypted!==true||req.socket.authorized!==true||
-      !equal(fingerprint,clientFingerprintSha256)){
+      !clientPinAccepted){
       req.resume();return reply(401,{error:'unauthorized'});
     }
     if(req.method!=='POST'||req.url!=='/v1/r58/'+tenantId||
@@ -153,10 +165,11 @@ export function createR58MtlsHandler({
 }
 export function createR58MtlsClient({
   endpoint,tenantId,sharedKey,ca,cert,key,serverFingerprintSha256,
-  now=()=>Date.now()
+  trustedServerPins=null,now=()=>Date.now()
 }={}){
   keyCheck(sharedKey,tenantId);
-  deny(HEX.test(serverFingerprintSha256||'')&&
+  deny((HEX.test(serverFingerprintSha256||'')||
+    typeof trustedServerPins==='function')&&
     (typeof ca==='string'||Buffer.isBuffer(ca))&&
     (typeof cert==='string'||Buffer.isBuffer(cert))&&
     (typeof key==='string'||Buffer.isBuffer(key))&&typeof now==='function',
@@ -179,7 +192,17 @@ export function createR58MtlsClient({
         maxHeaderSize:8192,checkServerIdentity(host,peer){
           const error=tls.checkServerIdentity(host,peer);
           if(error)return error;
-          if(!peer.raw||!equal(hex(peer.raw),serverFingerprintSha256))
+          let accepted=false;
+          try{
+            const pins=trustedServerPins?trustedServerPins(now()):
+              [serverFingerprintSha256];
+            deny(Array.isArray(pins)&&pins.length>=1&&pins.length<=2&&
+              pins.every(value=>HEX.test(value)),
+              'invalid signed server rotation window');
+            accepted=Boolean(peer.raw)&&pins.some(value=>
+              equal(hex(peer.raw),value));
+          }catch{accepted=false;}
+          if(!accepted)
             return Error('R5.8 mTLS refused: server certificate pin mismatch');
           return undefined;
         },
