@@ -20,7 +20,7 @@ docker run --rm --network host \
   -e R59_WORKER_SECRET="$OX_R58_WORKER_SECRET_KEY" \
   -e R59_COORD="$OX_R58_COORDINATOR_ACCESS_KEY" \
   -e R59_COORD_SECRET="$OX_R58_COORDINATOR_SECRET_KEY" \
-  --entrypoint /bin/sh minio/mc:latest -ec '
+  --entrypoint /bin/sh quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z -ec '
     mc alias set r59 http://127.0.0.1:9000 "$R59_ROOT" "$R59_ROOT_SECRET"
     mc admin user add r59 "$R59_WORKER" "$R59_WORKER_SECRET"
     mc admin user add r59 "$R59_COORD" "$R59_COORD_SECRET"
