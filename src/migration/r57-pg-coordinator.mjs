@@ -233,7 +233,8 @@ export function createR57PgCoordinator({
       deny(version===posted.versionId,
         'S3 object version changed during recovery');
       // A matching newly locked version proves the PUT reached S3.
-      // Only this pending operation may be acknowledged.
+      // Only this pending operation may be acknowledged. Revoke its old lease
+      // before a fresh publisher can enter; resumed workers fail fencing.
       const saved={operation:row.pending_op,sha256:row.pending_sha,
         versionId:version,epoch:Number(row.pending_epoch)};
       await client.query(
@@ -241,7 +242,8 @@ export function createR57PgCoordinator({
           committed_op=$2,committed_sha=$3,committed_version=$4,
           committed_epoch=$5,pending_op=NULL,pending_sha=NULL,
           pending_if_match=NULL,pending_create=NULL,pending_epoch=NULL,
-          pending_before_version=NULL,modified_at=clock_timestamp()
+          pending_before_version=NULL,holder=NULL,lease_id=NULL,expires_at=NULL,
+          modified_at=clock_timestamp()
           WHERE tenant=$1`,
         [tenantId,saved.operation,saved.sha256,version,saved.epoch]);
       return {ambiguous:false,reconciled:true,committed:saved,
