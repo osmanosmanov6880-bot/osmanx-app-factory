@@ -159,7 +159,7 @@ test('R5.8 never accepts cross-tenant or arbitrary HTTP path',async()=>{
 });
 test('R5.8 forbids arbitrary SQL and oversize pointer payload',async()=>{
   const c=fx.client(),lease=await c.acquire(HOLDER);
-  await assert.rejects(c.publish({lease,body:Buffer.alloc(5000),
+  assert.throws(()=>c.publish({lease,body:Buffer.alloc(5000),
     ifNoneMatch:true}),/signed pointer buffer required/);
   const invalid=signR58Request(key,{
     tenant:TENANT,nonce:'1'.repeat(32),issuedAt:Date.now(),
