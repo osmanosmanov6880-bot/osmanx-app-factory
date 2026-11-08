@@ -32,7 +32,12 @@ export function createR57PgCoordinator({
   // trust independent worker clocks to decide whose fencing epoch is current.
   async function locked(task){
     const client=await pool.connect();
-    let begun=false;
+    let begun=false,connectionError=null;
+    // pg Client may emit 'error' separately from a rejected query during a
+    // PostgreSQL backend kill. Never allow an in-flight coordinator to crash
+    // the Node.js process with an unhandled EventEmitter error.
+    const onConnectionError=e=>{connectionError=e;};
+    client.on?.('error',onConnectionError);
     try{
       await client.query('BEGIN');begun=true;
       await client.query(
@@ -48,8 +53,14 @@ export function createR57PgCoordinator({
       return value;
     }catch(e){
       if(begun)await client.query('ROLLBACK').catch(()=>{});
+      // Mark physically broken connections unfit for reuse in pg.Pool.
+      if(/connection terminated|terminating connection|ECONNRESET|57P01/i.test(
+        String(e?.message||'')+' '+String(e?.code||'')))connectionError=e;
       throw e;
-    }finally{client.release();}
+    }finally{
+      try{client.release(connectionError||undefined);}
+      finally{client.off?.('error',onConnectionError);}
+    }
   }
   function identity(lease){
     deny(lease&&lease.tenant===tenantId&&HOLDER.test(lease.holder||'')&&
