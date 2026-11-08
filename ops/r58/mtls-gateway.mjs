@@ -9,6 +9,8 @@ import {createR57ScopedS3Capabilities} from '../../src/migration/r57-s3-scope.mj
 import {createR57PgCoordinator} from '../../src/migration/r57-pg-coordinator.mjs';
 import {createR58PgNonceStore} from '../../src/migration/r58-nonce-store.mjs';
 import {createR58MtlsHandler} from '../../src/migration/r58-mtls-coordinator.mjs';
+import {createR59TrustWindow,activateR59PgTrustGeneration}
+  from '../../src/migration/r59-cert-rotation.mjs';
 
 async function secretFile(env,{hex=false,privateFile=true}={}){
   const path=process.env[env];
@@ -69,9 +71,26 @@ try{
     pool,privilegedRemote:caps.coordinator,tenantId,syntheticOnly:true
   });
   const nonceStore=createR58PgNonceStore({pool,tenantId});
+  let trustedClientPins=null;
+  if(process.env.OX_R59_TRUST_MANIFEST_FILE){
+    const [signedManifest,publicPem]=await Promise.all([
+      secretFile('OX_R59_TRUST_MANIFEST_FILE',{privateFile:false}),
+      secretFile('OX_R59_TRUST_PUBLIC_KEY_FILE',{privateFile:false})
+    ]);
+    const manifest=JSON.parse(signedManifest.toString('utf8'));
+    const trust=createR59TrustWindow({
+      manifest,publicKey:publicPem,tenantId,
+      minGeneration:Number(process.env.OX_R59_MIN_PIN_GENERATION||1)
+    });
+    trust.trustedClientPins();
+    trust.trustedServerPins();
+    await activateR59PgTrustGeneration({pool,tenantId,trustWindow:trust});
+    trustedClientPins=trust.trustedClientPins;
+  }
   const handler=createR58MtlsHandler({
     tenantId,coordinator,nonceStore,sharedKey,
-    clientFingerprintSha256:process.env.OX_R58_CLIENT_CERT_SHA256
+    clientFingerprintSha256:process.env.OX_R58_CLIENT_CERT_SHA256,
+    trustedClientPins
   });
   server=https.createServer({
     cert,key,ca,requestCert:true,rejectUnauthorized:true,
