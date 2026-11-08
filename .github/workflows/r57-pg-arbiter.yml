@@ -1,0 +1,137 @@
+name: R5.7 PostgreSQL distributed checkpoint and real MinIO crash recovery
+on:
+  push:
+    branches: ['feat/r57-pg-checkpoint-arbiter']
+    paths: ['src/migration/**','ops/r57/**','tests/r57_*.test.mjs','.github/workflows/r57-pg-arbiter.yml']
+  pull_request:
+    paths: ['src/migration/**','ops/r57/**','tests/r57_*.test.mjs','.github/workflows/r57-pg-arbiter.yml']
+permissions:
+  contents: read
+concurrency:
+  group: r57-pg-arbiter-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  pg-two-host-failure-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+        node: ['22','24']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r57-disposable-only
+          POSTGRES_DB: ox_r57
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_r57"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r57-disposable-only
+      PGDATABASE: ox_r57
+      OX_R57_E2E: 'YES'
+      OX_R40_EPHEMERAL: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install app without lifecycle scripts
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Check R5.7 modules and test entrypoints
+        run: |
+          node --check src/migration/r57-pg-coordinator.mjs
+          node --check src/migration/r57-s3-scope.mjs
+          node --check tests/r57_pg_coordinator.test.mjs
+          node --check tests/r57_s3_scope.test.mjs
+          node --check tests/r57_minio_pg_e2e.test.mjs
+          node --check src/migration/r56-coordinator.mjs
+      - name: Distributed PG fault matrix and tenant IAM denials
+        run: node --test --test-concurrency=2 tests/r57_pg_coordinator.test.mjs tests/r57_s3_scope.test.mjs
+      - name: R5.6 and R5.5 inherited regression
+        run: |
+          node --test tests/r56_coordinator.test.mjs
+          npm run test:r55
+  real-minio-worm-ack-loss:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r57-disposable-only
+          POSTGRES_DB: ox_r57
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_r57"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r57-disposable-only
+      PGDATABASE: ox_r57
+      OX_R57_E2E: 'YES'
+      OX_R57_MINIO_E2E: 'YES'
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R57_MINIO_ENDPOINT: 'http://127.0.0.1:9000/'
+      OX_R57_MINIO_BUCKET: r57-synthetic-worm
+      OX_R57_MINIO_ACCESS_KEY: R57CIACCESS01
+      OX_R57_MINIO_SECRET_KEY: R57_SYNTHETIC_NO_REAL_CREDS_2026_ONLY
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Start disposable pinned MinIO
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/r57-minio-data"
+          chmod 0700 "$RUNNER_TEMP/r57-minio-data"
+          docker run -d --name r57-minio-ci -p 127.0.0.1:9000:9000 \
+            --user "$(id -u):$(id -g)" \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            -e MINIO_ROOT_USER="$OX_R57_MINIO_ACCESS_KEY" \
+            -e MINIO_ROOT_PASSWORD="$OX_R57_MINIO_SECRET_KEY" \
+            -v "$RUNNER_TEMP/r57-minio-data:/data:rw" \
+            ghcr.io/intikhab49/minio-from-source@sha256:1025a6dd8452e6fe8d3fdf16dbce7c18f8417acd22e5abd7376d8322aee5edab
+          for attempt in $(seq 1 100); do
+            if curl --silent --fail http://127.0.0.1:9000/minio/health/live >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --silent --show-error --fail http://127.0.0.1:9000/minio/health/live
+      - name: Create seven-day COMPLIANCE bucket
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.OX_R57_MINIO_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.OX_R57_MINIO_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_EC2_METADATA_DISABLED: 'true'
+          AWS_PAGER: ''
+        run: |
+          set -euo pipefail
+          aws --endpoint-url http://127.0.0.1:9000 s3api create-bucket \
+            --bucket "$OX_R57_MINIO_BUCKET" --object-lock-enabled-for-bucket
+          aws --endpoint-url http://127.0.0.1:9000 s3api put-object-lock-configuration \
+            --bucket "$OX_R57_MINIO_BUCKET" \
+            --object-lock-configuration '{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"COMPLIANCE","Days":7}}}'
+      - name: Real MinIO, PG, SQLite, witness lost-ACK and recovery
+        run: node --test tests/r57_minio_pg_e2e.test.mjs
+      - name: Stop disposable S3 instance
+        if: always()
+        run: docker rm -f r57-minio-ci || true
