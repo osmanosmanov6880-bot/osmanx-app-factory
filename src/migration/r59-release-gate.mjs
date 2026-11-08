@@ -73,9 +73,11 @@ export function verifyR59ReleaseEvidence({
   try{valid=verify(null,Buffer.from(JSON.stringify(b)),trust.publicKey,
     Buffer.from(sig,'base64'));}catch{valid=false;}
   deny(valid,'untrusted or tampered reporter signature');
-  const publicDer=createPublicKey(trust.publicKey).export({
-    type:'spki',format:'der'
-  });
+  // createPublicKey() accepts PEM or a private KeyObject, but Node rejects
+  // an already-public KeyObject. Normalize both trusted input types safely.
+  const verifierKey=trust.publicKey?.type==='public'?
+    trust.publicKey:createPublicKey(trust.publicKey);
+  const publicDer=verifierKey.export({type:'spki',format:'der'});
   return {...b,reporterKeySha256:createHash('sha256').update(publicDer).digest('hex'),
     signatureVerified:true};
 }
