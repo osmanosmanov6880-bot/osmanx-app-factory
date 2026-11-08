@@ -69,6 +69,8 @@ test('R5.8 killing PostgreSQL backend during final checkpoint ack leaves durable
         async connect(){
           const raw=await f.pool.connect();
           return {
+            on(event,listener){raw.on(event,listener);return this;},
+            off(event,listener){raw.off(event,listener);return this;},
             async query(sql,args){
               if(!fired&&typeof sql==='string'&&
                 sql.includes('committed_op=$2')&&
@@ -81,7 +83,7 @@ test('R5.8 killing PostgreSQL backend during final checkpoint ack leaves durable
               }
               return raw.query(sql,args);
             },
-            release(){raw.release();}
+            release(error){raw.release(error);}
           };
         }
       };
