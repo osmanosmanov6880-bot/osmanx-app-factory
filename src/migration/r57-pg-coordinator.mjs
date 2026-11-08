@@ -19,7 +19,7 @@ export function createR57PgCoordinator({
 }={}){
   deny(syntheticOnly===true&&TENANT.test(tenantId||'')&&
     pool&&typeof pool.connect==='function'&&
-    privilegedRemote&&typeof privilegedRemote.put==='function'&&
+    privilegedRemote&&privilegedRemote.tenantPrefix===tenantId+'/'&&\n    privilegedRemote.role==='pointer-coordinator-only'&&\n    typeof privilegedRemote.put==='function'&&
     typeof privilegedRemote.getWithMetadata==='function'&&
     typeof privilegedRemote.inspectR49Worm==='function'&&
     typeof privilegedRemote.assertBucketControls==='function'&&
