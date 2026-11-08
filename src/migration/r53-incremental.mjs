@@ -195,8 +195,15 @@ export async function publishR53Incremental({sourceDb,publishFence=null,...arg}=
       (prior===null||/^"[a-fA-F0-9-]{1,128}"$/.test(prior.etag||'')),
       'fenced mode requires separate authority and S3 strong ETag CAS');
     await publishFence.assertCurrent();
-    await info.remote.put(HEAD_KEY,pointer,prior?
-      {ifMatch:prior.etag}:{ifNoneMatch:true});
+    if(typeof publishFence.publishPointer==='function'){
+      const receipt=await publishFence.publishPointer(pointer,prior?
+        {ifMatch:prior.etag}:{ifNoneMatch:true});
+      deny(receipt?.confirmed===true&&receipt?.sha256===sha(pointer),
+        'coordinator did not independently confirm exact signed pointer');
+    }else{
+      await info.remote.put(HEAD_KEY,pointer,prior?
+        {ifMatch:prior.etag}:{ifNoneMatch:true});
+    }
     await publishFence.assertCurrent();
   }else await info.remote.put(HEAD_KEY,pointer);
   const posted=await remoteHead(info);
