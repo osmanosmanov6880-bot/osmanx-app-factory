@@ -152,5 +152,5 @@ export function createR48S3Transport({endpoint,bucket,region,accessKey,secretKey
       productionCutoverAllowed:false};
   }
   return Object.freeze({put,get,getWithMetadata,assertBucketControls,inspectR49Worm,transport:'s3-sigv4-v1',
-    syntheticLoopbackOnly:loopback});
+    syntheticLoopbackOnly:loopback,tenantPrefix:projectPrefix});
 }
