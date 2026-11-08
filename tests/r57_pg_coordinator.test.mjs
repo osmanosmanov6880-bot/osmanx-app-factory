@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import pg from 'pg';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import {fileURLToPath} from 'node:url';
+
 import {randomBytes,createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {createR57PgCoordinator} from '../src/migration/r57-pg-coordinator.mjs';
@@ -169,5 +173,24 @@ test('R5.7 absent WORM retention blocks completion and recovery',
         ifNoneMatch:true}),/COMPLIANCE object lock/);
       await assert.rejects(second.recover(f.tenantId),/COMPLIANCE object lock/);
       await assert.rejects(take(second,f.tenantId,B),/unresolved S3 intent/);
+    }finally{await f.close();}
+  });
+
+test('R5.7 separate OS process cannot take PostgreSQL lease owned by parent process',
+  {skip:!enabled,timeout:30000},async()=>{
+    const f=await fixture();try{
+      const primary=f.make(),lease=await take(primary,f.tenantId);
+      const program=fileURLToPath(new URL('../scripts/r57_cross_process_child.mjs',import.meta.url));
+      const probe=async()=>{
+        const {stdout}=await promisify(execFile)(process.execPath,
+          [program,f.tenantId,B],
+          {env:{...process.env,OX_R57_E2E:'YES'},timeout:15000});
+        return JSON.parse(stdout.trim());
+      };
+      assert.equal((await probe()).acquired,false);
+      await primary.release(lease);
+      const accepted=await probe();
+      assert.equal(accepted.acquired,true);
+      assert.equal(accepted.epoch,2);
     }finally{await f.close();}
   });
