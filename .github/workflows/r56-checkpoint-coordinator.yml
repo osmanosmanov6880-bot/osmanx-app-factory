@@ -1,0 +1,35 @@
+name: R5.6 synthetic checkpoint coordinator fault matrix
+on:
+  push:
+    branches: ['feat/r56-atomic-pointer-coordinator']
+  pull_request:
+    paths:
+      - 'src/migration/r53-incremental.mjs'
+      - 'src/migration/r56-*.mjs'
+      - 'tests/r56_*.test.mjs'
+      - '.github/workflows/r56-checkpoint-coordinator.yml'
+permissions:
+  contents: read
+jobs:
+  synthetic-failure-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Syntax check and coordinator crash simulation
+        run: |
+          node --check src/migration/r56-coordinator.mjs
+          node --check src/migration/r56-publisher.mjs
+          node --check src/migration/r53-incremental.mjs
+          node --test tests/r56_coordinator.test.mjs
+      - name: Ancestor signed-fencing regression
+        run: npm run test:r55
