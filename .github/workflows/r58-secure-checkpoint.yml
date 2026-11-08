@@ -1,0 +1,72 @@
+name: R5.8 pinned mTLS PG replay and crash-recovery security gates
+on:
+  push:
+    branches: ['feat/r58-mtls-checkpoint-recovery']
+    paths: ['src/migration/r58-*.mjs','ops/r58/**','tests/r58_*.test.mjs','.github/workflows/r58-secure-checkpoint.yml']
+  pull_request:
+    paths: ['src/migration/r58-*.mjs','ops/r58/**','tests/r58_*.test.mjs','.github/workflows/r58-secure-checkpoint.yml']
+permissions:
+  contents: read
+concurrency:
+  group: r58-security-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  mtls-pg-security-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+        node: ['22','24']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r58-isolated-disposable
+          POSTGRES_DB: ox_r58
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_r58"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r58-isolated-disposable
+      PGDATABASE: ox_r58
+      OX_R58_PG_E2E: 'YES'
+      OX_R57_E2E: 'YES'
+      OX_R40_EPHEMERAL: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Synthetic-only dependency installation
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Syntax gate
+        run: |
+          node --check src/migration/r58-mtls-coordinator.mjs
+          node --check src/migration/r58-nonce-store.mjs
+          node --check src/migration/r58-iam-attestation.mjs
+          node --check src/migration/r58-incident-evidence.mjs
+          node --check ops/r58/mtls-gateway.mjs
+          node --check tests/r58_mtls_protocol.test.mjs
+          node --check tests/r58_pg_failure.test.mjs
+          node --check tests/r58_provider_roles_e2e.test.mjs
+      - name: Actual OpenSSL mTLS, HMAC, replay, role denials, incident evidence
+        run: |
+          openssl version
+          node --test --test-concurrency=2 tests/r58_mtls_protocol.test.mjs tests/r58_incident_evidence.test.mjs tests/r58_iam_attestation.test.mjs
+      - name: PostgreSQL persisted replay and backend-kill checkpoint recovery
+        run: |
+          node --test --test-concurrency=1 tests/r58_pg_failure.test.mjs
+      - name: Ancestor cross-process and encrypted CDC regression
+        run: |
+          node --test tests/r57_pg_coordinator.test.mjs tests/r57_s3_scope.test.mjs
+          node --test tests/r56_coordinator.test.mjs
+          npm run test:r55
+      - name: Optional distinct-real-IAM provider gate (only externally provisioned)
+        run: node --test tests/r58_provider_roles_e2e.test.mjs
