@@ -60,9 +60,9 @@ test('R6.0 immutable audited snapshot is signed, content-addressed and version W
 test('R6.0 audit credentials cannot modify mutable S3 checkpoint or worker encrypted segment',
   async()=>{
     const f=fixture(),key='r53/head.json';
-    await assert.rejects(f.remote.put(key,Buffer.from('forged')),/audit role may only/);
-    await assert.rejects(f.remote.getWithMetadata(key),/audit role may only/);
-    await assert.rejects(f.remote.put('r53/segments/'+'a'.repeat(64)+'.oxd',
+    assert.throws(()=>f.remote.put(key,Buffer.from('forged')),/audit role may only/);
+    assert.throws(()=>f.remote.getWithMetadata(key),/audit role may only/);
+    assert.throws(()=>f.remote.put('r53/segments/'+'a'.repeat(64)+'.oxd',
       Buffer.from('forged')),/audit role may only/);
     const policy=createR60AuditIamPolicy({
       tenantId:TENANT,bucket:'r60-disposable-worm'
