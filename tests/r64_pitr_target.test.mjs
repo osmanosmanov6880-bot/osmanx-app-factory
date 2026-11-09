@@ -7,6 +7,8 @@ import {readFile} from 'node:fs/promises';
 import {createHash,randomBytes,generateKeyPairSync} from 'node:crypto';
 import {verifyR64NamedPitrReplay}
   from '../src/migration/r64-pitr-target.mjs';
+import {signR64RecoveryBudget,verifyR64RecoveryBudget}
+  from '../src/migration/r64-recovery-budget.mjs';
 import {makeR64WalSegmentRecord,signR64WalArchive,verifyR64WalArchive}
   from '../src/migration/r64-wal-archive.mjs';
 const exec=promisify(execFile),sha=x=>createHash('sha256').update(x).digest('hex'),
@@ -219,6 +221,37 @@ test('R6.4 REAL PG15/16 base backup + archived WAL named-target PITR includes pr
       assert.equal(verified.preTargetWalCommitReplayed,true);
       assert.equal(verified.postTargetWalCommitExcluded,true);
       assert.equal(verified.productionCutoverAllowed,false);
+      // Count genuine source and PITR target rows, not caller-supplied numbers.
+      const sourceEvents=(await source.query(
+        'SELECT count(*)::integer AS n FROM ox_r64_pitr_event WHERE tenant=$1',
+        [tenantId])).rows[0].n;
+      const restoredEvents=(await restored.query(
+        'SELECT count(*)::integer AS n FROM ox_r64_pitr_event WHERE tenant=$1',
+        [tenantId])).rows[0].n;
+      assert.equal(sourceEvents,3);
+      assert.equal(restoredEvents,2);
+      const budgetSigner=generateKeyPairSync('ed25519'),budgetNow=Date.now();
+      const budgetPacket=signR64RecoveryBudget({
+        privateKey:budgetSigner.privateKey,payload:{
+          format:'osmanx-r64-recovery-budget-v1',scope:'disposable-lab',
+          tenantId,recoveryId:id(),
+          archiveInventorySha256:archiveReceipt.archiveInventorySha256,
+          checkpointSha256:backupSha,targetLsn:point,
+          sourceCommittedEvents:sourceEvents,targetCommittedEvents:2,
+          recoveredEvents:restoredEvents,startedAt:started,readyAt:budgetNow,
+          budgetRtoMs:150000,budgetExcludedEvents:1,
+          reporterId:'r64_ci_reviewer',nonce:id(),
+          issuedAt:budgetNow-1000,expiresAt:budgetNow+30000
+        }
+      });
+      const measured=verifyR64RecoveryBudget({
+        packet:budgetPacket,publicKey:budgetSigner.publicKey,
+        tenantId,archiveInventorySha256:archiveReceipt.archiveInventorySha256,
+        checkpointSha256:backupSha,targetLsn:point
+      });
+      assert.equal(measured.labBudgetSatisfied,true);
+      assert.equal(measured.deliberatelyExcludedPostTargetEvents,1);
+      assert.equal(measured.industrialRpoCertified,false);
     }finally{
       await Promise.all([source.end().catch(()=>{}),
         restored?.end().catch(()=>{})]);
