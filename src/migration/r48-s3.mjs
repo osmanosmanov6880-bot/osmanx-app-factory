@@ -5,7 +5,7 @@ import {createHmac,createHash} from 'node:crypto';
 import https from 'node:https';
 import http from 'node:http';
 
-const OBJ=/^(?:archives\/[a-f0-9]{32}\.oxb|catalog\/[a-f0-9]{64}\.jsonl|head\.json|r53\/head\.json|r53\/segments\/[a-f0-9]{64}\.oxd)$/;
+const OBJ=/^(?:archives\/[a-f0-9]{32}\.oxb|catalog\/[a-f0-9]{64}\.jsonl|head\.json|r53\/head\.json|r53\/segments\/[a-f0-9]{64}\.oxd|r60\/audit\/[a-f0-9]{64}\.json)$/;
 const BUCKET=/^(?=.{3,63}$)[a-z0-9][a-z0-9.-]*[a-z0-9]$/;
 const REGION=/^[a-z0-9-]{2,32}$/,ACCESS=/^[A-Z0-9]{8,40}$/;
 const MAX=128*1024*1024+128;
