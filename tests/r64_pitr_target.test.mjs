@@ -172,14 +172,18 @@ test('R6.4 REAL PG15/16 base backup + archived WAL named-target PITR includes pr
       });
       assert.equal(archiveReceipt.fullSegmentHashesVerified,true);
       // No reuse of a live data volume. The lab setup verified its absence.
-      const targetConfig='set -euo pipefail; cp -a /backup/. /restore/; '+
-        'chown -R postgres:postgres /restore; chmod 0700 /restore; '+
-        'rm -f /restore/postmaster.pid /restore/standby.signal; '+
-        'touch /restore/recovery.signal; '+
-        'printf "%s\\n" "restore_command = '\\''cp /archive/%f %p'\\''" '+
-        '"recovery_target_name = '\\'''+targetName+'\\''" '+
-        '"recovery_target_action = '\\''promote'\\''" '+
-        '"recovery_target_inclusive = on" >> /restore/postgresql.auto.conf';
+      const targetConfig=[
+        'set -euo pipefail',
+        'cp -a /backup/. /restore/',
+        'chown -R postgres:postgres /restore',
+        'chmod 0700 /restore',
+        'rm -f /restore/postmaster.pid /restore/standby.signal',
+        'touch /restore/recovery.signal',
+        "echo \"restore_command = 'cp /archive/%f %p'\" >> /restore/postgresql.auto.conf",
+        "echo \"recovery_target_name = '"+targetName+"'\" >> /restore/postgresql.auto.conf",
+        "echo \"recovery_target_action = 'promote'\" >> /restore/postgresql.auto.conf",
+        'echo "recovery_target_inclusive = on" >> /restore/postgresql.auto.conf'
+      ].join('; ');
       await docker(['run','--rm',
         '-v','ox-r64-basebackup:/backup:ro',
         '-v','ox-r64-pitr-restore:/restore',
