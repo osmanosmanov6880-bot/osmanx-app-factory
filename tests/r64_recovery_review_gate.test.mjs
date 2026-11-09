@@ -158,5 +158,5 @@ test('R6.4 foreign tenant cannot substitute backup or incident approvals',async(
   const f=fixture();
   await assert.rejects(evaluateR64RecoveryReview({
     ...f.params,tenantId:'f'.repeat(24)
-  }),/signed WAL inventory differs|signed WAL inventory|foreign/);
+  }),/tenant-pinned signed WAL|signed WAL inventory differs|foreign/);
 });
