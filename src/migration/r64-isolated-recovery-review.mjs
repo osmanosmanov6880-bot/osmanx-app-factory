@@ -43,6 +43,24 @@ export async function assessR64IsolatedRecovery({
     checkpointSha256:archive.baseBackupSha256,
     targetLsn:wal.targetLsn,now
   });
+  // The reporter may be trusted but the signed count itself is not proof.
+  // Query both real PG sources again and bind counts to the signed packet.
+  const [sourceCount,restoredCount]=await Promise.all([
+    pointInTime.source.query(
+      'SELECT count(*)::integer AS n FROM ox_r64_pitr_event WHERE tenant=$1',
+      [tenantId]),
+    pointInTime.restored.query(
+      'SELECT count(*)::integer AS n FROM ox_r64_pitr_event WHERE tenant=$1',
+      [tenantId])
+  ]);
+  const sourceEvents=sourceCount.rows?.[0]?.n,
+    restoredEvents=restoredCount.rows?.[0]?.n;
+  deny(Number.isSafeInteger(sourceEvents)&&
+    Number.isSafeInteger(restoredEvents)&&
+    sourceEvents===budget.packet.sourceCommittedEvents&&
+    restoredEvents===budget.packet.recoveredEvents&&
+    restoredEvents===budget.packet.targetCommittedEvents,
+    'independent PostgreSQL event counters differ from signed recovery budget');
   const evidenceSha256=digest({
     tenantId,incidentId,epoch,pinnedCommitSha,
     archive:wal.archiveInventorySha256,
