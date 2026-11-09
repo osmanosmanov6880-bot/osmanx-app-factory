@@ -59,4 +59,22 @@ done
 docker exec pg-r59-standby pg_isready -U postgres -d ox_r59
 docker exec pg-r59-standby psql -U postgres -d ox_r59 -tAc \
   "SELECT pg_is_in_recovery()" | grep -qx 't'
-echo "R5.9 disposable physical PG replica is streaming"
+# Upgrade from asynchronous bootstrap to remote_apply after standby is ready.
+# Every subsequent checkpoint COMMIT waits for a physical standby replay.
+docker exec pg-r59-primary psql -v ON_ERROR_STOP=1 -U postgres -d ox_r59 \
+  -c "ALTER SYSTEM SET synchronous_standby_names = 'FIRST 1 (\"r59-standby\")'"
+docker exec pg-r59-primary psql -v ON_ERROR_STOP=1 -U postgres -d ox_r59 \
+  -c "ALTER SYSTEM SET synchronous_commit = 'remote_apply'"
+docker exec pg-r59-primary psql -v ON_ERROR_STOP=1 -U postgres -d ox_r59 \
+  -c "SELECT pg_reload_conf()"
+ready=0
+for attempt in $(seq 1 80); do
+  state="$(docker exec pg-r59-primary psql -U postgres -d ox_r59 -tAc \
+    "SELECT count(*) FROM pg_stat_replication WHERE application_name='r59-standby' AND sync_state='sync' AND state='streaming'")"
+  if [[ "$state" == "1" ]]; then ready=1; break; fi
+  sleep 1
+done
+if [[ "$ready" != "1" ]]; then echo "No synchronous standby" >&2; exit 4; fi
+docker exec pg-r59-primary psql -U postgres -d ox_r59 -tAc \
+  "SHOW synchronous_commit" | grep -qx 'remote_apply'
+echo "R6.0 disposable PostgreSQL remote_apply synchronous standby streaming"
