@@ -201,7 +201,6 @@ jobs:
       OX_R64_LAB_ACK: 'YES'
       OX_R64_PITR_E2E: 'YES'
       OX_R64_POSTGRES_VERSION: ${{ matrix.postgres }}
-      OX_R64_ARCHIVE_DIR: ${{ runner.temp }}/r64-archive
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -220,7 +219,7 @@ jobs:
           docker rm -f pg-r64-restored pg-r64-primary || true
           docker volume rm ox-r64-restored ox-r64-backup || true
           docker network rm ox-r64-net || true
-          sudo rm -rf "$OX_R64_ARCHIVE_DIR" || true
+          sudo rm -rf "$RUNNER_TEMP/r64-archive" || true
   r64-real-rebuilt-former-primary:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
