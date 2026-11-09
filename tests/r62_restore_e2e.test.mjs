@@ -26,7 +26,7 @@ function signed(row,logicalDump){
     nonce:randomBytes(16).toString('hex'),issuedAt:now-1000,
     expiresAt:now+60000
   }});
-  return {manifest,publicKey,now};
+  return {manifest,publicKey,clock:now};
 }
 test('R6.2 signed logical dump exactly matches retained pending checkpoint fields',
   ()=>{
@@ -54,7 +54,7 @@ test('R6.2 mismatched pending payload, expired signer and changed SQL bytes fail
       restoredRow:row
     }),/logical dump digest/);
     assert.throws(()=>verifyR62Restore({
-      ...p,tenantId:TENANT,logicalDump:dump,now:()=>p.now+100000
+      ...p,tenantId:TENANT,logicalDump:dump,now:()=>p.clock+100000
     }),/expired/);
     const forged={...p.manifest,walLsn:'0/2000'};
     assert.throws(()=>verifyR62Restore({...p,manifest:forged,
