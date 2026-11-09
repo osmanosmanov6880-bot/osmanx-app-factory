@@ -1,0 +1,138 @@
+name: R6.3 isolated PG timeline quarantine, physical backup validation and split-brain regressions
+on:
+  push:
+    branches: ['feat/r63-ha-fork-backup-rejoin-gates']
+    paths: ['src/migration/r63-*.mjs','ops/r63/**','tests/r63_*.test.mjs','tests/r62_partition_e2e.test.mjs','.github/workflows/r63-ha-quarantine.yml']
+  pull_request:
+    paths: ['src/migration/r63-*.mjs','ops/r63/**','tests/r63_*.test.mjs','tests/r62_partition_e2e.test.mjs','.github/workflows/r63-ha-quarantine.yml']
+permissions:
+  contents: read
+concurrency:
+  group: r63-hard-deny-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  safety-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+        node: ['22','24']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r63-disposable
+          POSTGRES_DB: ox_r63
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_r63"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r63-disposable
+      PGDATABASE: ox_r63
+      OX_R63_PG_E2E: 'YES'
+      OX_R40_EPHEMERAL: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install isolated dependencies without scripts
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Syntax of all five R6.3 modules and new tests
+        run: |
+          node --check src/migration/r63-pool-fault-guard.mjs
+          node --check src/migration/r63-timeline-rejoin.mjs
+          node --check src/migration/r63-pg-quarantine.mjs
+          node --check src/migration/r63-physical-backup-evidence.mjs
+          node --check src/migration/r63-manual-rejoin-review.mjs
+          node --check tests/r63_pool_faults.test.mjs
+          node --check tests/r63_timeline_rejoin.test.mjs
+          node --check tests/r63_pg_quarantine.test.mjs
+          node --check tests/r63_physical_backup.test.mjs
+          node --check tests/r63_manual_rejoin_review.test.mjs
+          node --check tests/r62_partition_e2e.test.mjs
+      - name: Actual PostgreSQL quarantine concurrency and five-source signed review
+        run: |
+          node --test --test-concurrency=1 \
+            tests/r63_pool_faults.test.mjs \
+            tests/r63_timeline_rejoin.test.mjs \
+            tests/r63_pg_quarantine.test.mjs \
+            tests/r63_physical_backup.test.mjs \
+            tests/r63_manual_rejoin_review.test.mjs
+      - name: Inherited R6.2 unsafe COMMIT, anti-fork and offline signatures
+        run: |
+          node --test --test-concurrency=1 \
+            tests/r62_partition_e2e.test.mjs \
+            tests/r62_fence_evidence.test.mjs \
+            tests/r62_restore_e2e.test.mjs \
+            tests/r62_s3_lineage.test.mjs \
+            tests/r62_failover_drill_gate.test.mjs
+  physical-basebackup-and-timeline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+    env:
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R59_LAB_ACK: 'YES'
+      OX_R59_POSTGRES_VERSION: ${{ matrix.postgres }}
+      OX_R63_PHYSICAL_LAB: 'YES'
+      OX_R63_TIMELINE_LAB: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Isolated dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Create actual streaming physical PG cluster
+        run: bash ops/r59/pg-ha-lab-setup.sh
+      - name: pg_basebackup, pg_verifybackup and physical standalone restore
+        run: node --test tests/r63_physical_backup.test.mjs
+      - name: Kill old primary, promote replica, compare actual timeline system identity
+        run: node --test tests/r63_timeline_rejoin.test.mjs
+      - name: Remove disposable restored and source clusters
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f pg-r63-physical-restored pg-r59-standby pg-r59-primary || true
+          docker volume rm ox-r63-physical-restored ox-r63-physical-backup ox-r59-standby || true
+          docker network rm ox-r59-net || true
+  physical-network-partition:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+    env:
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R59_LAB_ACK: 'YES'
+      OX_R59_POSTGRES_VERSION: ${{ matrix.postgres }}
+      OX_R62_PARTITION_LAB: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Isolated dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Create disposable physical synchronous standby
+        run: bash ops/r59/pg-ha-lab-setup.sh
+      - name: Observe async broken pool sockets and reject unconfirmed remote_apply COMMIT
+        run: timeout --signal=TERM --kill-after=10s 90s node --test tests/r62_partition_e2e.test.mjs
+      - name: Remove isolated PG containers
+        if: always()
+        run: |
+          docker rm -f pg-r59-standby pg-r59-primary || true
+          docker volume rm ox-r59-standby || true
+          docker network rm ox-r59-net || true
