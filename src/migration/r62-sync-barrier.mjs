@@ -30,7 +30,7 @@ export async function runR62SyntheticSyncBarrier({
       'standby is no longer in recovery');
     try{
       await connection.query('BEGIN');transaction=true;
-      await connection.query('SET LOCAL statement_timeout = $1',[timeoutMs]);
+      await connection.query('SET LOCAL statement_timeout = '+timeoutMs);
       await connection.query(
         'INSERT INTO ox_r62_sync_barrier(tenant,challenge_id) VALUES($1,$2)',
         [tenantId,challengeId]);
