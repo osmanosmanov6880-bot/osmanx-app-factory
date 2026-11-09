@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # R6.4 disposable WAL-archiving PG15/16 primary for a REAL target-LSN PITR.
+# Synthetic WAL files are readable by the non-root CI verifier for hashing;
+# do not copy these CI-only permissions to a real customer backup system.
 # NEVER run on production or any Docker host with shared customer data.
 set -euo pipefail
 if [[ "$OX_R40_EPHEMERAL" != "YES" || "$OX_R64_LAB_ACK" != "YES" ]]; then
@@ -31,7 +33,7 @@ docker network create ox-r64-net >/dev/null
 docker volume create ox-r64-backup >/dev/null
 docker run --rm -v "$OX_R64_ARCHIVE_DIR:/archive:rw" --entrypoint bash \
   "postgres:$OX_R64_POSTGRES_VERSION" -ec \
-  'chown postgres:postgres /archive; chmod 0700 /archive'
+  'chown postgres:postgres /archive; chmod 0755 /archive'
 docker run -d --name pg-r64-primary --network ox-r64-net \
   -e POSTGRES_PASSWORD=r64-disposable-only \
   -e POSTGRES_DB=ox_r64 \
@@ -40,7 +42,7 @@ docker run -d --name pg-r64-primary --network ox-r64-net \
   -c wal_level=replica \
   -c max_wal_senders=6 \
   -c archive_mode=on \
-  -c "archive_command=test ! -e /archive/%f && cp %p /archive/%f" >/dev/null
+  -c "archive_command=test ! -e /archive/%f && cp %p /archive/%f && chmod 0644 /archive/%f" >/dev/null
 ready=0
 for attempt in $(seq 1 90); do
   if docker exec pg-r64-primary pg_isready -U postgres -d ox_r64 >/dev/null 2>&1; then
