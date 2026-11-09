@@ -7,6 +7,7 @@ import {promisify} from 'node:util';
 import {randomBytes,generateKeyPairSync} from 'node:crypto';
 import {runR62SyntheticSyncBarrier} from '../src/migration/r62-sync-barrier.mjs';
 import {signR62FenceObservation} from '../src/migration/r62-fence-evidence.mjs';
+import {observeR63PgPoolFaults} from '../src/migration/r63-pool-fault-guard.mjs';
 const run=promisify(execFile),TENANT='a'.repeat(24),CHALLENGE='b'.repeat(32);
 function mock({sync='remote_apply',standby=true,commitFailure=false,
   commitHang=false,found=true,delta='0'}={}){
@@ -80,6 +81,11 @@ test('R6.2 REAL Docker network partition: old primary still alive, sync COMMIT n
   {skip:!enabled,timeout:60000},async()=>{
     const primary=new pg.Pool(config(5543)),standby=new pg.Pool(config(5544));
     const tenantId=randomBytes(12).toString('hex');
+    // Disconnected standby can emit an async idle pg.Pool socket error
+    // after the Docker network is severed. Record it: this is evidence of
+    // network failure, never proof the former primary was fenced.
+    const primaryFaults=observeR63PgPoolFaults({pool:primary,role:'primary'});
+    const standbyFaults=observeR63PgPoolFaults({pool:standby,role:'standby'});
     let disconnected=false;
     try{
       await primary.query(await readFile(
@@ -143,5 +149,9 @@ test('R6.2 REAL Docker network partition: old primary still alive, sync COMMIT n
         'ox-r59-net','pg-r59-standby']).catch(()=>{});
       await Promise.all([primary.end().catch(()=>{}),
         standby.end().catch(()=>{})]);
+      const observed=standbyFaults.stop();
+      const former=primaryFaults.stop();
+      assert.equal(observed.canPromote,false);
+      assert.equal(former.canPromote,false);
     }
   });
