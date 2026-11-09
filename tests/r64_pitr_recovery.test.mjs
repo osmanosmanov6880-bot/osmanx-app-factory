@@ -83,7 +83,7 @@ async function bootRestore(version,targetLsn,archiveDir){
 test('R6.4 ACTUAL PostgreSQL 15/16 archived-WAL PITR retains selected COMMIT but excludes later acknowledged COMMIT',
   {skip:!enabled,timeout:125000},async()=>{
     const version=process.env.OX_R64_POSTGRES_VERSION,
-      archiveDir=process.env.OX_R64_ARCHIVE_DIR;
+      archiveDir=process.env.RUNNER_TEMP+'/r64-archive';
     assert(['15','16'].includes(version));
     assert(archiveDir?.startsWith(process.env.RUNNER_TEMP+'/'));
     const primary=new pg.Pool(config(5564));
