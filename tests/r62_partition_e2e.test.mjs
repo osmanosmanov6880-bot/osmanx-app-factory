@@ -9,11 +9,12 @@ import {runR62SyntheticSyncBarrier} from '../src/migration/r62-sync-barrier.mjs'
 import {signR62FenceObservation} from '../src/migration/r62-fence-evidence.mjs';
 const run=promisify(execFile),TENANT='a'.repeat(24),CHALLENGE='b'.repeat(32);
 function mock({sync='remote_apply',standby=true,commitFailure=false,
-  found=true,delta='0'}={}){
+  commitHang=false,found=true,delta='0'}={}){
   const query=async(sql)=>{
     if(sql.includes("current_setting"))return {rows:[{recovering:false,mode:sync}]};
     if(sql.includes('pg_current_wal_lsn'))return {rows:[{lsn:'0/1000'}]};
     if(sql==='COMMIT'&&commitFailure)throw Error('canceling statement due to statement timeout');
+    if(sql==='COMMIT'&&commitHang)return new Promise(()=>{});
     return {rows:[]};
   };
   const primary={
@@ -42,6 +43,18 @@ test('R6.2 timed-out synchronous COMMIT is ambiguous, never a rollback certifica
   assert.equal(x.classification,'unconfirmed-synchronous-commit');
   assert.equal(x.mayPromote,false);
 });
+test('R6.2 blackholed COMMIT has bounded independent deadline and cannot clear pending',
+  {timeout:6000},async()=>{
+    const start=Date.now();
+    const x=await runR62SyntheticSyncBarrier({
+      ...mock({commitHang:true}),timeoutMs:500
+    });
+    assert.equal(x.freshSynchronousCommitConfirmed,false);
+    assert.equal(x.outcomeMayHaveCommittedLocally,true);
+    assert.equal(x.mayPromote,false);
+    assert.equal(x.mayClearPendingIntent,false);
+    assert(Date.now()-start<5000);
+  });
 test('R6.2 wrong recovery mode, async leader, missing replay or invalid scope denied',
   async()=>{
     await assert.rejects(runR62SyntheticSyncBarrier(mock({sync:'on'})),
