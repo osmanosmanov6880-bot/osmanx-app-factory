@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# R5.9 throwaway PG physical-replica lab. Never run on a live Docker host.
+# R5.9 throwaway PG physical-replica lab.
+# Probe TCP, not the initdb bootstrap Unix socket, before sending SQL. Never run on a live Docker host.
 set -euo pipefail
 if [[ "$OX_R59_LAB_ACK" != "YES" || "$OX_R40_EPHEMERAL" != "YES" ]]; then
   echo "R5.9 requires disposable-lab acknowledgement" >&2; exit 4
@@ -24,10 +25,10 @@ docker run -d --name pg-r59-primary --network ox-r59-net \
   -c wal_level=replica -c max_wal_senders=10 \
   -c hot_standby=on -c max_replication_slots=10 >/dev/null
 for attempt in $(seq 1 80); do
-  if docker exec pg-r59-primary pg_isready -U postgres -d ox_r59 >/dev/null 2>&1; then break; fi
+  if docker exec pg-r59-primary pg_isready -h 127.0.0.1 -p 5432 -U postgres -d ox_r59 >/dev/null 2>&1; then break; fi
   sleep 1
 done
-docker exec pg-r59-primary pg_isready -U postgres -d ox_r59
+docker exec pg-r59-primary pg_isready -h 127.0.0.1 -p 5432 -U postgres -d ox_r59
 docker exec pg-r59-primary psql -v ON_ERROR_STOP=1 -U postgres -d ox_r59 \
   -c "CREATE ROLE r59_repl WITH REPLICATION LOGIN PASSWORD 'r59-only-disposable-repl';"
 # The official Docker image only grants local replication by default. Explicit
