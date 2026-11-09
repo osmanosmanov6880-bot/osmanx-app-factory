@@ -1,0 +1,154 @@
+name: R6.0 bounded S3 forensics, PG preflight, WORM audit and signed CI provenance
+on:
+  push:
+    branches: ['feat/r60-recovery-evidence-hardening']
+    paths: ['src/migration/r60-*.mjs','src/migration/r48-s3.mjs','tests/r60_*.test.mjs','ops/r59/**','.github/workflows/r60-recovery-evidence.yml']
+  pull_request:
+    paths: ['src/migration/r60-*.mjs','src/migration/r48-s3.mjs','tests/r60_*.test.mjs','ops/r59/**','.github/workflows/r60-recovery-evidence.yml']
+permissions:
+  contents: read
+concurrency:
+  group: r60-safe-recovery-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  isolated-security-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22','24']
+        postgres: ['15','16']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r60-isolated
+          POSTGRES_DB: ox_r60
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_r60"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r60-isolated
+      PGDATABASE: ox_r60
+      OX_R40_EPHEMERAL: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install no-lifecycle dependencies in disposable runner
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Syntax and fixed-key allowlist
+        run: |
+          node --check src/migration/r48-s3.mjs
+          node --check src/migration/r60-s3-version-forensics.mjs
+          node --check src/migration/r60-pg-promotion-preflight.mjs
+          node --check src/migration/r60-worm-audit-anchor.mjs
+          node --check src/migration/r60-ci-provenance-gate.mjs
+          node --check tests/r60_s3_forensics.test.mjs
+          node --check tests/r60_pg_promotion_preflight.test.mjs
+          node --check tests/r60_worm_audit_anchor.test.mjs
+          node --check tests/r60_ci_provenance_gate.test.mjs
+          bash -n ops/r59/minio-roles-lab.sh
+          bash -n ops/r59/pg-ha-lab-setup.sh
+      - name: Read-only forensics and negative CI-proof gate matrix
+        run: |
+          node --test --test-concurrency=2 \
+            tests/r60_s3_forensics.test.mjs \
+            tests/r60_pg_promotion_preflight.test.mjs \
+            tests/r60_worm_audit_anchor.test.mjs \
+            tests/r60_ci_provenance_gate.test.mjs
+      - name: Inherited strict certificate and signed release tests
+        run: |
+          node --test tests/r59_release_gate.test.mjs tests/r59_cert_rotation.test.mjs
+  real-replication-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+    env:
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R59_LAB_ACK: 'YES'
+      OX_R59_POSTGRES_VERSION: ${{ matrix.postgres }}
+      OX_R60_HA_E2E: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Start physical PG synchronous standby lab
+        run: bash ops/r59/pg-ha-lab-setup.sh
+      - name: Verify exact primary/replica fenced intent and replay before failover
+        run: node --test tests/r60_pg_promotion_preflight.test.mjs
+      - name: Cleanup throwaway physical PG
+        if: always()
+        run: |
+          docker rm -f pg-r59-standby pg-r59-primary || true
+          docker volume rm ox-r59-standby || true
+          docker network rm ox-r59-net || true
+  real-worm-audit-anchor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R60_MINIO_E2E: 'YES'
+      OX_R60_MINIO_ENDPOINT: http://127.0.0.1:9000/
+      OX_R60_MINIO_BUCKET: r60-audit-worm
+      OX_R60_MINIO_ACCESS_KEY: R60CIACCESS01
+      OX_R60_MINIO_SECRET_KEY: R60_SYNTHETIC_MINIO_TEST_ONLY_SECRET_2026
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Start disposable pinned MinIO
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/r60-minio-data"
+          chmod 0700 "$RUNNER_TEMP/r60-minio-data"
+          docker run -d --name r60-minio \
+            -p 127.0.0.1:9000:9000 \
+            --user "$(id -u):$(id -g)" \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            -e MINIO_ROOT_USER="$OX_R60_MINIO_ACCESS_KEY" \
+            -e MINIO_ROOT_PASSWORD="$OX_R60_MINIO_SECRET_KEY" \
+            -v "$RUNNER_TEMP/r60-minio-data:/data:rw" \
+            ghcr.io/intikhab49/minio-from-source@sha256:1025a6dd8452e6fe8d3fdf16dbce7c18f8417acd22e5abd7376d8322aee5edab
+          for attempt in $(seq 1 80); do
+            if curl --silent --fail http://127.0.0.1:9000/minio/health/live >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --silent --show-error --fail http://127.0.0.1:9000/minio/health/live
+      - name: Create disposable COMPLIANCE versioned bucket
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: R60CIACCESS01
+          AWS_SECRET_ACCESS_KEY: R60_SYNTHETIC_MINIO_TEST_ONLY_SECRET_2026
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_EC2_METADATA_DISABLED: 'true'
+          AWS_PAGER: ''
+        run: |
+          set -euo pipefail
+          aws --endpoint-url http://127.0.0.1:9000 s3api create-bucket \
+            --bucket r60-audit-worm --object-lock-enabled-for-bucket
+          aws --endpoint-url http://127.0.0.1:9000 s3api put-object-lock-configuration \
+            --bucket r60-audit-worm \
+            --object-lock-configuration '{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"COMPLIANCE","Days":7}}}'
+      - name: Actual immutable audit anchor write, version retention, readback
+        run: node --test tests/r60_minio_worm_anchor.test.mjs
+      - name: Remove disposable MinIO container
+        if: always()
+        run: docker rm -f r60-minio || true
