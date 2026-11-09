@@ -16,10 +16,14 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 export HOME="$tmp"
 release="RELEASE.2025-08-13T08-35-41Z"
-base="https://dl.min.io/client/mc/release/linux-amd64/archive"
-binary="mc.$release"
-curl -fLSs --retry 3 "$base/$binary" -o "$tmp/$binary"
-curl -fLSs --retry 3 "$base/$binary.sha256sum" -o "$tmp/$binary.sha256sum"
+binary="mc.linux-amd64.$release"
+base="https://github.com/minio/mc/releases/download/$release"
+# Official MinIO archive endpoint currently returns HTTP 410. Use exact
+# release assets from GitHub instead. Fail closed if either asset is missing.
+curl -fLSs --retry 3 --retry-delay 2 "$base/$binary" -o "$tmp/$binary"
+curl -fLSs --retry 3 --retry-delay 2 "$base/$binary.sha256sum" \
+  -o "$tmp/$binary.sha256sum"
+printf '%s\n' "$(cat "$tmp/$binary.sha256sum")"
 (cd "$tmp" && sha256sum -c "$binary.sha256sum")
 chmod 0500 "$tmp/$binary"
 MC="$tmp/$binary"
