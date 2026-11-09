@@ -1,0 +1,71 @@
+name: R6.1 dual human approval, immutable PG incident journal and recovery assessments
+on:
+  push:
+    branches: ['feat/r61-recovery-operator-gates']
+    paths: ['src/migration/r61-*.mjs','ops/r61/**','tests/r61_*.test.mjs','.github/workflows/r61-operator-safety.yml']
+  pull_request:
+    paths: ['src/migration/r61-*.mjs','ops/r61/**','tests/r61_*.test.mjs','.github/workflows/r61-operator-safety.yml']
+permissions:
+  contents: read
+concurrency:
+  group: r61-operator-safety-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  independent-operator-and-pg-review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+        node: ['22','24']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r61-ci-disposable
+          POSTGRES_DB: ox_r61
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_r61"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r61-ci-disposable
+      PGDATABASE: ox_r61
+      OX_R61_PG_E2E: 'YES'
+      OX_R40_EPHEMERAL: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Isolated install without application lifecycle scripts
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Validate new modules and migration
+        run: |
+          node --check src/migration/r61-dual-approval.mjs
+          node --check src/migration/r61-pg-incident-store.mjs
+          node --check src/migration/r61-recovery-assessment.mjs
+          node --check tests/r61_dual_approval.test.mjs
+          node --check tests/r61_pg_incident_store.test.mjs
+          node --check tests/r61_recovery_assessment.test.mjs
+          node --check tests/r61_operator_workflow_pg.test.mjs
+          bash -n ops/r59/minio-roles-lab.sh
+      - name: Two independent Ed25519 reviewers and false-evidence denial
+        run: node --test tests/r61_dual_approval.test.mjs
+      - name: Real PostgreSQL immutable incident and 2-process serialization
+        run: node --test --test-concurrency=1 tests/r61_pg_incident_store.test.mjs
+      - name: Real PostgreSQL guarded recovery workflow and unchanged fenced intent
+        run: node --test tests/r61_operator_workflow_pg.test.mjs
+      - name: Reconciliation decision rejection and race tests
+        run: node --test tests/r61_recovery_assessment.test.mjs
+      - name: R6.0 inherited WORM forensic/CI evidence regressions
+        run: |
+          node --test tests/r60_worm_audit_anchor.test.mjs tests/r60_ci_provenance_gate.test.mjs
+          node --test tests/r60_s3_forensics.test.mjs tests/r60_pg_promotion_preflight.test.mjs
+      - name: R5.9 inherited strictly non-production release gate
+        run: node --test tests/r59_release_gate.test.mjs
