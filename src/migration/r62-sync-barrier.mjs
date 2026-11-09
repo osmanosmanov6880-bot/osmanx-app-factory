@@ -15,7 +15,7 @@ export async function runR62SyntheticSyncBarrier({
     Number.isInteger(timeoutMs)&&timeoutMs>=500&&timeoutMs<=5000,
     'disposable lab PostgreSQL pools and fresh challenge required');
   const connection=await primary.connect();
-  let transaction=false,broken=null,ack=false;
+  let transaction=false,commitStarted=false,broken=null,ack=false;
   const onError=e=>{broken=e;};
   connection.on?.('error',onError);
   try{
@@ -34,11 +34,28 @@ export async function runR62SyntheticSyncBarrier({
       await connection.query(
         'INSERT INTO ox_r62_sync_barrier(tenant,challenge_id) VALUES($1,$2)',
         [tenantId,challengeId]);
-      await connection.query('COMMIT');transaction=false;ack=true;
+      commitStarted=true;
+      // PostgreSQL may wait for remote_apply even after local WAL commit.
+      // An independent client-side deadline is mandatory: a server-side
+      // statement_timeout is NOT a reliable proof of remote acknowledgement.
+      let timer;
+      try{
+        await Promise.race([
+          connection.query('COMMIT'),
+          new Promise((_,reject)=>{
+            timer=setTimeout(
+              ()=>reject(Error('R62_ACK_DEADLINE: ambiguous sync commit')),
+              timeoutMs+1500);
+          })
+        ]);
+      }finally{clearTimeout(timer);}
+      transaction=false;ack=true;
     }catch(e){
-      if(transaction)await connection.query('ROLLBACK').catch(()=>{});
-      if(/connection terminated|ECONNRESET|57P01/i.test(
-        String(e?.message||'')+' '+String(e?.code||'')))broken=e;
+      // Once COMMIT was sent, even a timeout cannot prove a rollback.
+      // Do not enqueue ROLLBACK on a socket whose COMMIT may still wait.
+      if(transaction&&!commitStarted)
+        await connection.query('ROLLBACK').catch(()=>{});
+      broken=e; // force pg.Pool to destroy and replace the ambiguous socket
       return Object.freeze({
         format:'osmanx-r62-sync-barrier-v1',tenantId,challengeId,
         freshSynchronousCommitConfirmed:false,
