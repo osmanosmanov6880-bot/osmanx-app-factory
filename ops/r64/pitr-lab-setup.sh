@@ -8,7 +8,10 @@ if [[ "$OX_R40_EPHEMERAL" != "YES" || "$OX_R64_LAB_ACK" != "YES" ]]; then
   echo "Refusing non-disposable PITR lab" >&2; exit 4
 fi
 case "$OX_R64_POSTGRES_VERSION" in 15|16) ;; *) exit 4;; esac
-if [[ -z "$RUNNER_TEMP" || "$OX_R64_ARCHIVE_DIR" != "$RUNNER_TEMP/r64-archive" ]]; then
+if [[ -z "$RUNNER_TEMP" ]]; then echo "RUNNER_TEMP required" >&2; exit 4; fi
+OX_R64_ARCHIVE_DIR="$RUNNER_TEMP/r64-archive"
+export OX_R64_ARCHIVE_DIR
+if [[ "$OX_R64_ARCHIVE_DIR" != "$RUNNER_TEMP/r64-archive" ]]; then
   echo "Archive must live in this runner's disposable private directory" >&2; exit 4
 fi
 if [[ -e "$OX_R64_ARCHIVE_DIR" ]]; then
