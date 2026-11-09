@@ -36,6 +36,6 @@ test('R6.0 real versioned COMPLIANCE MinIO retains independent audit anchor byte
     assert.equal(second.versionId,first.versionId);
     assert.equal(second.digest,first.digest);
     assert.equal(second.productionCutoverAllowed,false);
-    await assert.rejects(remote.put('r53/head.json',
+    assert.throws(()=>remote.put('r53/head.json',
       Buffer.from('must-not-write-head')),/audit role may only/);
   });
