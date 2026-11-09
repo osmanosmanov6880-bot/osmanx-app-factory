@@ -20,6 +20,10 @@ function db(events,timeline){
     if(sql.includes('pg_control_system()'))return {rows:[{
       recovering:false,system_id:SYSTEM,timeline
     }]};
+    if(sql.startsWith('SELECT count(*)::integer AS n FROM ox_r64_pitr_event')){
+      assert.equal(args[0],TENANT);
+      return {rows:[{n:events.length}]};
+    }
     assert(sql.startsWith('SELECT event_id,payload_sha'));
     return {rows:[...events].filter(([id])=>args[1].includes(id))
       .map(([id,sha])=>({event_id:id,payload_sha:sha}))};
@@ -72,8 +76,8 @@ async function fixture(){
     sourceProbeHash:'a'.repeat(64),replicaProbeHash:'a'.repeat(64)
   };
   const pointInTime={
-    source:db([[pre,PRE_SHA],[post,POST_SHA]],1),
-    restored:db([[pre,PRE_SHA]],2),
+    source:db([['3'.repeat(32),'4'.repeat(64)],[pre,PRE_SHA],[post,POST_SHA]],1),
+    restored:db([['3'.repeat(32),'4'.repeat(64)],[pre,PRE_SHA]],2),
     targetName:'r64_marker_integrated',preId:pre,postId:post,
     preSha256:PRE_SHA,postSha256:POST_SHA,
     expectedSystemId:SYSTEM,restoreStartedAt:NOW-10000
@@ -130,6 +134,15 @@ test('R6.4 forbidden old primary and unsafe recovery budget prevent lab readines
     await assert.rejects(assessR64IsolatedRecovery(slow),
       /reporter signature not valid/);
   });
+test('R6.4 correctly signed report with fake recovered-row counts is rejected by independent PostgreSQL query',
+  async()=>{
+    const f=await fixture();
+    const replaced={...f,pointInTime:{...f.pointInTime,
+      source:db([['3'.repeat(32),'4'.repeat(64)],[pre,PRE_SHA],
+        [post,POST_SHA],['5'.repeat(32),'6'.repeat(64)]],1)}};
+    await assert.rejects(assessR64IsolatedRecovery(replaced),
+      /independent PostgreSQL event counters differ/);
+  });
 test('R6.4 forged reviewer signature, missing WAL and false late-commit state fail closed',
   async()=>{
     const f=await fixture();
@@ -144,7 +157,7 @@ test('R6.4 forged reviewer signature, missing WAL and false late-commit state fa
       /missing, truncated or tampered WAL segment/);
     const fork=await fixture();
     fork.pointInTime={...fork.pointInTime,
-      restored:db([[pre,PRE_SHA],[post,POST_SHA]],2)};
+      restored:db([['3'.repeat(32),'4'.repeat(64)],[pre,PRE_SHA],[post,POST_SHA]],2)};
     await assert.rejects(assessR64IsolatedRecovery(fork),
       /post-target commit/);
   });
