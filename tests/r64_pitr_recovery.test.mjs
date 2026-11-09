@@ -9,6 +9,8 @@ import {readR63PgTimeline}
   from '../src/migration/r63-timeline-rejoin.mjs';
 import {scanR64LocalWalArchive,signR64WalArchive,verifyR64WalArchive}
   from '../src/migration/r64-wal-archive-evidence.mjs';
+import {signR64PitrBoundary,verifyR64PitrBoundary}
+  from '../src/migration/r64-pitr-boundary.mjs';
 const run=promisify(execFile),
   enabled=process.env.OX_R64_PITR_E2E==='YES'&&
     process.env.OX_R40_EPHEMERAL==='YES'&&
@@ -159,6 +161,31 @@ test('R6.4 ACTUAL PostgreSQL 15/16 archived-WAL PITR retains selected COMMIT but
       assert.equal(post.systemId,source.systemId);
       assert.equal(post.inRecovery,false);
       assert(post.timelineId>source.timelineId);
+      const original=(await primary.query(
+        'SELECT marker FROM ox_r64_pitr_markers WHERE tenant=$1 ORDER BY marker',
+        [tenantId])).rows.map(x=>x.marker);
+      const boundaryKey=generateKeyPairSync('ed25519');
+      const receipt=signR64PitrBoundary({
+        privateKey:boundaryKey.privateKey,payload:{
+          format:'osmanx-r64-pitr-boundary-v1',scope:'disposable-lab',
+          tenantId,incidentId:randomBytes(16).toString('hex'),
+          systemId:source.systemId,targetLsn,afterLsn,
+          archiveEvidenceSha256:verified.archiveEvidenceSha256,
+          baseBackupSha256:verified.baseBackupSha256,
+          nonce:randomBytes(16).toString('hex'),
+          issuedAt:now-500,expiresAt:now+120000
+        }
+      });
+      const measured=verifyR64PitrBoundary({
+        manifest:receipt,publicKey:boundaryKey.publicKey,
+        tenantId,sourceMarkers:original,restoredMarkers:rows,
+        restoredSystemId:post.systemId,archiveReceipt:verified,
+        now:()=>now
+      });
+      assert.equal(measured.selectedTransactionRecovered,true);
+      assert.equal(measured.intentionallyLaterTransactionExcluded,true);
+      assert.equal(measured.unknownCustomerWritesNotCounted,true);
+      assert.equal(measured.industrialZeroRpoCertified,false);
       assert.equal(verified.offsiteImmutableCustodyVerified,false);
       assert.equal(verified.productionCutoverAllowed,false);
     }finally{
