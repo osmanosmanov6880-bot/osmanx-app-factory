@@ -5,6 +5,7 @@ import {createHash,createPublicKey,sign,verify} from 'node:crypto';
 const HEX24=/^[a-f0-9]{24}$/,HEX32=/^[a-f0-9]{32}$/,
   HEX64=/^[a-f0-9]{64}$/,NODE=/^[a-z][a-z0-9-]{2,48}$/,
   LSN=/^[0-9A-F]+\/[0-9A-F]+$/,
+  OBSERVER=/^[a-z][a-z0-9_-]{2,48}$/,
   FORMAT='osmanx-r62-primary-fence-observation-v1';
 const ROLES=new Set(['fence-observer','standby-observer']);
 const sha=b=>createHash('sha256').update(b).digest('hex');
@@ -23,7 +24,7 @@ function normalize(p){
     HEX64.test(p.challengeSha256||'')&&
     p.primaryPowerState==='terminated'&&
     p.standbyInRecovery===true&&p.standbyReplayVerified===true&&
-    ROLES.has(p.role)&&NODE.test(p.observerId||'')&&
+    ROLES.has(p.role)&&OBSERVER.test(p.observerId||'')&&
     HEX32.test(p.nonce||'')&&p.scope==='disposable-lab'&&
     Number.isSafeInteger(p.issuedAt)&&Number.isSafeInteger(p.expiresAt)&&
     p.expiresAt>p.issuedAt&&p.expiresAt-p.issuedAt<=60000,
