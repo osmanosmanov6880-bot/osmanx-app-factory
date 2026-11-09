@@ -1,0 +1,170 @@
+name: R6.2 isolated split-brain negative, signed recovery, real PG/MinIO version integrity
+on:
+  push:
+    branches: ['feat/r62-partition-restore-fork-gates']
+    paths: ['src/migration/r62-*.mjs','ops/r62/**','tests/r62_*.test.mjs','.github/workflows/r62-partition-restore.yml']
+  pull_request:
+    paths: ['src/migration/r62-*.mjs','ops/r62/**','tests/r62_*.test.mjs','.github/workflows/r62-partition-restore.yml']
+permissions:
+  contents: read
+concurrency:
+  group: r62-safety-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  signed-recovery-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+        node: ['22','24']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r62-disposable
+          POSTGRES_DB: ox_r62
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_r62"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r62-disposable
+      PGDATABASE: ox_r62
+      OX_R61_PG_E2E: 'YES'
+      OX_R40_EPHEMERAL: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install dependencies without lifecycle hooks
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Syntax gates for five R6.2 implementations
+        run: |
+          node --check src/migration/r62-fence-evidence.mjs
+          node --check src/migration/r62-sync-barrier.mjs
+          node --check src/migration/r62-restore-evidence.mjs
+          node --check src/migration/r62-s3-lineage.mjs
+          node --check src/migration/r62-failover-drill-gate.mjs
+          node --check tests/r62_fence_evidence.test.mjs
+          node --check tests/r62_partition_e2e.test.mjs
+          node --check tests/r62_restore_e2e.test.mjs
+          node --check tests/r62_s3_lineage.test.mjs
+          node --check tests/r62_s3_lineage_minio.test.mjs
+          node --check tests/r62_failover_drill_gate.test.mjs
+      - name: Signed observer, WAL barrier, restore, S3 fork and failover evidence tests
+        run: |
+          node --test --test-concurrency=1 \
+            tests/r62_fence_evidence.test.mjs \
+            tests/r62_partition_e2e.test.mjs \
+            tests/r62_restore_e2e.test.mjs \
+            tests/r62_s3_lineage.test.mjs \
+            tests/r62_failover_drill_gate.test.mjs
+      - name: Inherited real PG15/16 R6.1 reviewer/incident regression
+        run: |
+          node --test --test-concurrency=1 \
+            tests/r61_dual_approval.test.mjs \
+            tests/r61_pg_incident_store.test.mjs \
+            tests/r61_recovery_assessment.test.mjs \
+            tests/r61_operator_workflow_pg.test.mjs
+      - name: Inherited R6.0 safety checks
+        run: |
+          node --test \
+            tests/r60_s3_forensics.test.mjs \
+            tests/r60_worm_audit_anchor.test.mjs \
+            tests/r60_ci_provenance_gate.test.mjs
+  real-network-partition-and-restore:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+    env:
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R59_LAB_ACK: 'YES'
+      OX_R59_POSTGRES_VERSION: ${{ matrix.postgres }}
+      OX_R62_RESTORE_LAB: 'YES'
+      OX_R62_PARTITION_LAB: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies without scripts
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Construct disposable synchronous physical standby
+        run: bash ops/r59/pg-ha-lab-setup.sh
+      - name: Restore full fenced checkpoint row from signed logical dump into second PostgreSQL container
+        run: node --test tests/r62_restore_e2e.test.mjs
+      - name: Disconnect active standby and prove synchronous COMMIT cannot authorize promotion
+        run: node --test tests/r62_partition_e2e.test.mjs
+      - name: Cleanup throwaway PostgreSQL and backup rehearsal
+        if: always()
+        run: |
+          docker rm -f pg-r62-restore pg-r59-standby pg-r59-primary || true
+          docker volume rm ox-r59-standby || true
+          docker network rm ox-r59-net || true
+  real-minio-version-fork:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R62_LAB_ACK: 'YES'
+      OX_R62_MINIO_E2E: 'YES'
+      OX_R62_MINIO_ENDPOINT: 'http://127.0.0.1:9000/'
+      OX_R62_MINIO_BUCKET: 'r62-lineage-worm'
+      OX_R62_MINIO_ACCESS_KEY: 'R62LABACCESS01'
+      OX_R62_MINIO_SECRET_KEY: 'R62_DISPOSABLE_MINIO_ONLY_NEVER_PRODUCTION_2026'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Start pinned, disposable real MinIO
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/r62-minio-data"
+          chmod 0700 "$RUNNER_TEMP/r62-minio-data"
+          docker run -d --name r62-minio \
+            -p 127.0.0.1:9000:9000 \
+            --user "$(id -u):$(id -g)" \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            -e MINIO_ROOT_USER="$OX_R62_MINIO_ACCESS_KEY" \
+            -e MINIO_ROOT_PASSWORD="$OX_R62_MINIO_SECRET_KEY" \
+            -v "$RUNNER_TEMP/r62-minio-data:/data:rw" \
+            ghcr.io/intikhab49/minio-from-source@sha256:1025a6dd8452e6fe8d3fdf16dbce7c18f8417acd22e5abd7376d8322aee5edab
+          for attempt in $(seq 1 80); do
+            if curl --silent --fail http://127.0.0.1:9000/minio/health/live >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --silent --show-error --fail http://127.0.0.1:9000/minio/health/live
+      - name: Set COMPLIANCE retention on versioned WORM bucket
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: R62LABACCESS01
+          AWS_SECRET_ACCESS_KEY: R62_DISPOSABLE_MINIO_ONLY_NEVER_PRODUCTION_2026
+          AWS_DEFAULT_REGION: us-east-1
+          AWS_EC2_METADATA_DISABLED: 'true'
+          AWS_PAGER: ''
+        run: |
+          set -euo pipefail
+          aws --endpoint-url http://127.0.0.1:9000 s3api create-bucket \
+            --bucket r62-lineage-worm --object-lock-enabled-for-bucket
+          aws --endpoint-url http://127.0.0.1:9000 s3api put-object-lock-configuration \
+            --bucket r62-lineage-worm \
+            --object-lock-configuration '{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"COMPLIANCE","Days":7}}}'
+      - name: Real three-version signed S3 pointer fork detection
+        run: node --test tests/r62_s3_lineage_minio.test.mjs
+      - name: Cleanup isolated MinIO
+        if: always()
+        run: docker rm -f r62-minio || true
