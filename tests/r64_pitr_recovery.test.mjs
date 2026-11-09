@@ -42,7 +42,7 @@ async function basebackup(version){
     '/backup/backup_manifest'
   ])).stdout);
 }
-async function waitArchived(pool,dir){
+async function waitArchived(pool,dir,requiredName){
   for(let i=0;i<80;i++){
     const state=(await pool.query(
       'SELECT last_archived_wal,failed_count FROM pg_stat_archiver'
@@ -50,7 +50,7 @@ async function waitArchived(pool,dir){
     if(state.last_archived_wal){
       try{
         const segments=await scanR64LocalWalArchive({directory:dir});
-        if(segments.length>=1)return segments;
+        if(segments.some(x=>x.name===requiredName))return segments;
       }catch{}
     }
     await new Promise(ok=>setTimeout(ok,250));
@@ -116,8 +116,11 @@ test('R6.4 ACTUAL PostgreSQL 15/16 archived-WAL PITR retains selected COMMIT but
         'SELECT pg_wal_lsn_diff($1::pg_lsn,$2::pg_lsn)::text AS delta',
         [afterLsn,targetLsn])).rows[0].delta;
       assert(Number(distance)>0,'target must precede excluded COMMIT');
+      const requiredWal=(await primary.query(
+        'SELECT pg_walfile_name($1::pg_lsn) AS file',[afterLsn]
+      )).rows[0].file;
       await primary.query('SELECT pg_switch_wal()');
-      const segments=await waitArchived(primary,archiveDir);
+      const segments=await waitArchived(primary,archiveDir,requiredWal);
       const kp=generateKeyPairSync('ed25519'),now=Date.now();
       const archive=signR64WalArchive({
         privateKey:kp.privateKey,payload:{
