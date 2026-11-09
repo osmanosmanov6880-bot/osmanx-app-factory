@@ -104,7 +104,7 @@ jobs:
       - name: Restore full fenced checkpoint row from signed logical dump into second PostgreSQL container
         run: node --test tests/r62_restore_e2e.test.mjs
       - name: Disconnect active standby and prove synchronous COMMIT cannot authorize promotion
-        run: node --test tests/r62_partition_e2e.test.mjs
+        run: timeout --signal=TERM --kill-after=10s 90s node --test tests/r62_partition_e2e.test.mjs
       - name: Cleanup throwaway PostgreSQL and backup rehearsal
         if: always()
         run: |
