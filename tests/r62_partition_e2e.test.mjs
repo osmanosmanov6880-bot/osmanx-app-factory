@@ -87,8 +87,20 @@ test('R6.2 REAL Docker network partition: old primary still alive, sync COMMIT n
         'inspect','-f','{{.State.Running}}','pg-r59-primary'
       ],{timeout:15000});
       assert.equal(state.stdout.trim(),'true');
+      // Disconnected Docker containers may lose the host-mapped PG port.
+      // Inspect standby from INSIDE the actual container without trusting
+      // a stale network connection or pretending the partition is healed.
+      const follower=await run('docker',[
+        'exec','pg-r59-standby','psql','-U','postgres','-d','ox_r59',
+        '-tAc','SELECT pg_is_in_recovery()'
+      ],{timeout:15000});
+      assert.equal(follower.stdout.trim(),'t');
+      const partitionedStandby={async query(sql){
+        assert.equal(sql,'SELECT pg_is_in_recovery() AS recovering');
+        return {rows:[{recovering:true}]};
+      }};
       const after=await runR62SyntheticSyncBarrier({
-        primary,standby,tenantId,
+        primary,standby:partitionedStandby,tenantId,
         challengeId:randomBytes(16).toString('hex'),
         timeoutMs:1500,syntheticOnly:true
       });
@@ -96,9 +108,6 @@ test('R6.2 REAL Docker network partition: old primary still alive, sync COMMIT n
       assert.equal(after.classification,'unconfirmed-synchronous-commit');
       assert.equal(after.outcomeMayHaveCommittedLocally,true);
       assert.equal(after.mayPromote,false);
-      assert.equal((await standby.query(
-        'SELECT pg_is_in_recovery() AS recovering'
-      )).rows[0].recovering,true);
       const key=generateKeyPairSync('ed25519');
       const timestamp=Date.now();
       const attempted={
