@@ -1,0 +1,127 @@
+name: R6.4 actual archived WAL named PITR, signed custody and safe follower rebootstrap
+on:
+  push:
+    branches: ['feat/r64-archive-pitr-rebootstrap']
+    paths: ['src/migration/r64-*.mjs','ops/r64/**','tests/r64_*.test.mjs','.github/workflows/r64-archive-pitr.yml']
+  pull_request:
+    paths: ['src/migration/r64-*.mjs','ops/r64/**','tests/r64_*.test.mjs','.github/workflows/r64-archive-pitr.yml']
+permissions:
+  contents: read
+concurrency:
+  group: r64-archive-pitr-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  signed-evidence-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+        node: ['22','24']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r64-ci-local
+          POSTGRES_DB: ox_r63
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_r63"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r64-ci-local
+      PGDATABASE: ox_r63
+      OX_R63_PG_E2E: 'YES'
+      OX_R40_EPHEMERAL: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install dependencies without lifecycle scripts
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Strict JavaScript and bash syntax verification
+        run: |
+          for file in src/migration/r64-*.mjs tests/r64_*.test.mjs; do
+            node --check "$file"
+          done
+          bash -n ops/r64/pitr-lab-setup.sh
+      - name: Full R6.4 cryptographic WAL, PITR, rebootstrap, loss budget and manual review suite
+        run: |
+          node --test --test-concurrency=1 \
+            tests/r64_wal_archive.test.mjs \
+            tests/r64_pitr_target.test.mjs \
+            tests/r64_rebootstrap.test.mjs \
+            tests/r64_recovery_budget.test.mjs \
+            tests/r64_isolated_review.test.mjs
+      - name: Inherited immutable quarantine and previous disaster safety regressions
+        run: |
+          node --test --test-concurrency=1 \
+            tests/r63_pg_quarantine.test.mjs \
+            tests/r63_timeline_rejoin.test.mjs \
+            tests/r63_physical_backup.test.mjs \
+            tests/r62_fence_evidence.test.mjs \
+            tests/r62_s3_lineage.test.mjs
+  real-archived-wal-pitr:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+    env:
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R64_PITR_ACK: 'YES'
+      OX_R64_PITR_LAB: 'YES'
+      OX_R64_POSTGRES_VERSION: ${{ matrix.postgres }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Start isolated archive_mode PostgreSQL and pinned volumes
+        run: bash ops/r64/pitr-lab-setup.sh
+      - name: Prove named PITR point replays post-backup PRE commit and excludes POST commit
+        run: timeout --signal=TERM --kill-after=10s 180s node --test tests/r64_pitr_target.test.mjs
+      - name: Remove isolated PITR and archive files
+        if: always()
+        run: |
+          docker rm -f pg-r64-recovered pg-r64-primary || true
+          docker volume rm ox-r64-pitr-restore ox-r64-basebackup ox-r64-walarchive || true
+          docker network rm ox-r64-net || true
+  real-rebuilt-standby:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+    env:
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R59_LAB_ACK: 'YES'
+      OX_R59_POSTGRES_VERSION: ${{ matrix.postgres }}
+      OX_R64_REBOOTSTRAP_LAB: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies without scripts
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Create actual disposable synchronous primary and standby
+        run: bash ops/r59/pg-ha-lab-setup.sh
+      - name: Kill former primary, promote standby and rebuild fresh read-only follower
+        run: timeout --signal=TERM --kill-after=10s 150s node --test tests/r64_rebootstrap.test.mjs
+      - name: Remove disposable cluster and rebootstrap disk
+        if: always()
+        run: |
+          docker rm -f pg-r64-rebuilt pg-r59-standby pg-r59-primary || true
+          docker volume rm ox-r64-rebuilt ox-r59-standby || true
+          docker network rm ox-r59-net || true
