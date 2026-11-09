@@ -62,7 +62,7 @@ docker exec pg-r59-standby psql -U postgres -d ox_r59 -tAc \
 # Upgrade from asynchronous bootstrap to remote_apply after standby is ready.
 # Every subsequent checkpoint COMMIT waits for a physical standby replay.
 docker exec pg-r59-primary psql -v ON_ERROR_STOP=1 -U postgres -d ox_r59 \
-  -c "ALTER SYSTEM SET synchronous_standby_names = 'FIRST 1 (r59-standby)'"
+  -c "ALTER SYSTEM SET synchronous_standby_names = 'FIRST 1 (\"r59-standby\")'"
 docker exec pg-r59-primary psql -v ON_ERROR_STOP=1 -U postgres -d ox_r59 \
   -c "ALTER SYSTEM SET synchronous_commit = 'remote_apply'"
 docker exec pg-r59-primary psql -v ON_ERROR_STOP=1 -U postgres -d ox_r59 \
