@@ -24,7 +24,13 @@ curl -fLSs --retry 3 --retry-delay 2 "$base/$binary" -o "$tmp/$binary"
 curl -fLSs --retry 3 --retry-delay 2 "$base/$binary.sha256sum" \
   -o "$tmp/$binary.sha256sum"
 printf '%s\n' "$(cat "$tmp/$binary.sha256sum")"
-(cd "$tmp" && sha256sum -c "$binary.sha256sum")
+# Published digest refers to the generic release binary name, while the
+# GitHub asset includes "linux-amd64". Verify exactly one strict digest.
+digest="$(awk 'NR==1 {print $1}' "$tmp/$binary.sha256sum")"
+[[ "$digest" =~ ^[a-fA-F0-9]{64}$ ]] || {
+  echo "Refusing MinIO Client without valid SHA-256 digest" >&2; exit 4;
+}
+printf '%s  %s\n' "$digest" "$tmp/$binary" | sha256sum -c -
 chmod 0500 "$tmp/$binary"
 MC="$tmp/$binary"
 "$MC" alias set r59 http://127.0.0.1:9000 "$OX_R59_MINIO_ROOT" "$OX_R59_MINIO_SECRET"
