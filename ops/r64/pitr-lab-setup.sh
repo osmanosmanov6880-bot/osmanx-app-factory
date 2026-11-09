@@ -48,7 +48,7 @@ docker run -d --name pg-r64-primary --network ox-r64-net \
   -c "archive_command=test ! -e /archive/%f && cp %p /archive/%f && chmod 0644 /archive/%f" >/dev/null
 ready=0
 for attempt in $(seq 1 90); do
-  if docker exec pg-r64-primary pg_isready -U postgres -d ox_r64 >/dev/null 2>&1; then
+  if docker exec pg-r64-primary pg_isready -h 127.0.0.1 -p 5432 -U postgres -d ox_r64 >/dev/null 2>&1; then
     ready=1; break
   fi
   sleep 1
