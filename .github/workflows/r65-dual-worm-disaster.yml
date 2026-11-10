@@ -1,0 +1,144 @@
+name: R6.5 dual MinIO WORM custody, destroyed primary WAL and measured synthetic PG RPO
+on:
+  push:
+    branches: ['feat/r65-dual-worm-disaster-rpo']
+    paths: ['src/migration/r65-*.mjs','src/migration/r48-s3.mjs','ops/r65/**','tests/r65_*.test.mjs','.github/workflows/r65-dual-worm-disaster.yml']
+  pull_request:
+    paths: ['src/migration/r65-*.mjs','src/migration/r48-s3.mjs','ops/r65/**','tests/r65_*.test.mjs','.github/workflows/r65-dual-worm-disaster.yml']
+permissions:
+  contents: read
+concurrency:
+  group: r65-laboratory-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  signed-dual-custody-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+        node: ['22','24']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: r65-disposable
+          POSTGRES_DB: ox_r65
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ox_r65"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R63_PG_E2E: 'YES'
+      PGHOST: '127.0.0.1'
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: r65-disposable
+      PGDATABASE: ox_r65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install isolated dependencies without scripts
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Verify five new R6.5 modules, tests and isolated MinIO setup
+        run: |
+          for file in src/migration/r65-*.mjs tests/r65_*.test.mjs; do node --check "$file"; done
+          node --check src/migration/r48-s3.mjs
+          bash -n ops/r65/two-minio-lab.sh
+      - name: Signed mirror anti-tamper, 20-ACK gap accounting and dual human review
+        run: |
+          node --test --test-concurrency=1 \
+            tests/r65_dual_worm_minio.test.mjs \
+            tests/r65_dual_wal_bundle.test.mjs \
+            tests/r65_synthetic_rpo.test.mjs \
+            tests/r65_disaster_detached_restore.test.mjs \
+            tests/r65_disaster_readiness_gate.test.mjs
+      - name: Inherited actual R6.3 quarantine and R6.4 PITR security
+        run: |
+          node --test --test-concurrency=1 \
+            tests/r63_pg_quarantine.test.mjs \
+            tests/r64_wal_archive.test.mjs \
+            tests/r64_pitr_boundary.test.mjs \
+            tests/r61_dual_approval.test.mjs
+  two-real-compliance-minio-servers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R65_LAB_ACK: 'YES'
+      OX_R65_DUAL_MINIO_E2E: 'YES'
+      OX_R65_MINIO_A_ENDPOINT: 'http://127.0.0.1:9000/'
+      OX_R65_MINIO_A_BUCKET: 'r65-wal-first-worm'
+      OX_R65_MINIO_A_KEY: 'R65LABPRIMARY01'
+      OX_R65_MINIO_A_SECRET: 'R65_FIRST_DISPOSABLE_SECRET_NOT_FOR_PRODUCTION_2026'
+      OX_R65_MINIO_B_ENDPOINT: 'http://127.0.0.1:9001/'
+      OX_R65_MINIO_B_BUCKET: 'r65-wal-second-worm'
+      OX_R65_MINIO_B_KEY: 'R65LABSECOND02'
+      OX_R65_MINIO_B_SECRET: 'R65_SECOND_DISPOSABLE_SECRET_NOT_FOR_PRODUCTION_2026'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Start distinct locked MinIO processes on separate loopback ports
+        run: bash ops/r65/two-minio-lab.sh
+      - name: Real WORM upload, retain, byte compare, wrong-version refusal and archive rehydration
+        run: timeout --signal=TERM --kill-after=10s 120s node --test tests/r65_dual_worm_minio.test.mjs
+      - name: Destroy both disposable MinIO instances
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f r65-minio-a r65-minio-b || true
+          sudo rm -rf "$RUNNER_TEMP/r65-minio-a" "$RUNNER_TEMP/r65-minio-b" || true
+  real-primary-and-local-wal-loss:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['15','16']
+    env:
+      OX_R40_EPHEMERAL: 'YES'
+      OX_R64_LAB_ACK: 'YES'
+      OX_R64_POSTGRES_VERSION: ${{ matrix.postgres }}
+      OX_R65_LAB_ACK: 'YES'
+      OX_R65_DUAL_MINIO_E2E: 'YES'
+      OX_R65_DETACHED_PITR_E2E: 'YES'
+      OX_R65_MINIO_A_ENDPOINT: 'http://127.0.0.1:9000/'
+      OX_R65_MINIO_A_BUCKET: 'r65-wal-first-worm'
+      OX_R65_MINIO_A_KEY: 'R65LABPRIMARY01'
+      OX_R65_MINIO_A_SECRET: 'R65_FIRST_DISPOSABLE_SECRET_NOT_FOR_PRODUCTION_2026'
+      OX_R65_MINIO_B_ENDPOINT: 'http://127.0.0.1:9001/'
+      OX_R65_MINIO_B_BUCKET: 'r65-wal-second-worm'
+      OX_R65_MINIO_B_KEY: 'R65LABSECOND02'
+      OX_R65_MINIO_B_SECRET: 'R65_SECOND_DISPOSABLE_SECRET_NOT_FOR_PRODUCTION_2026'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Start disposable WAL archiving PostgreSQL
+        run: bash ops/r64/pitr-lab-setup.sh
+      - name: Start two independent versioned WORM MinIO processes
+        run: bash ops/r65/two-minio-lab.sh
+      - name: Really destroy source database and local WAL; restore from two independent WORM copies and measure lost PostgreSQL ACKs
+        run: timeout --signal=TERM --kill-after=10s 240s node --test tests/r65_disaster_detached_restore.test.mjs
+      - name: Clean up disconnected PostgreSQL, both S3 containers and all isolated volumes
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f pg-r65-disaster-restored pg-r64-primary r65-minio-a r65-minio-b || true
+          docker volume rm ox-r65-disaster-restored ox-r64-backup || true
+          docker network rm ox-r64-net || true
+          sudo rm -rf "$RUNNER_TEMP/r64-archive" \
+            "$RUNNER_TEMP/r65-archive-from-independent-s3" \
+            "$RUNNER_TEMP/r65-minio-a" "$RUNNER_TEMP/r65-minio-b" || true
