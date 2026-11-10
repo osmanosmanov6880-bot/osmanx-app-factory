@@ -34,7 +34,8 @@ test('R6.5 refuse same S3 endpoint, missing distinct keys and unknown tenant',
       secretKey:'R65_LAB_SECRET_FIRST_PROCESS_NO_REAL_DATA_2026'};
     assert.throws(()=>createR65DualWormCustody({
       tenantId:'a'.repeat(24),allowSyntheticLoopback:true,
-      stores:[origin,{...origin,storeId:'second-process'}]
+      stores:[origin,{...origin,storeId:'second-process',
+        accessKey:'R65LABACCB2'}]
     }),/separate S3 server endpoints/);
     assert.throws(()=>createR65DualWormCustody({
       tenantId:'a'.repeat(24),allowSyntheticLoopback:true,
