@@ -12,6 +12,9 @@ import {signR65DualWalBundle,verifyR65DualWalBundle}
   from '../src/migration/r65-dual-wal-bundle.mjs';
 import {measureR65SyntheticRpo,readR65PostgresLedger}
   from '../src/migration/r65-synthetic-rpo.mjs';
+import {signR61Approval} from '../src/migration/r61-dual-approval.mjs';
+import {assessR65HumanOnlyRecovery}
+  from '../src/migration/r65-disaster-readiness-gate.mjs';
 import {scanR64LocalWalArchive}
   from '../src/migration/r64-wal-archive-evidence.mjs';
 import {readR63PgTimeline}
@@ -214,6 +217,38 @@ test('R6.5 ACTUAL PG15/16 total source-container+local-WAL loss, dual WORM resto
       assert.equal(rpo.sourceSqliteCommitMeasured,false);
       assert.equal(rpo.industrialZeroRpoCertified,false);
       assert.equal(rpo.productionCutoverAllowed,false);
+      const security=generateKeyPairSync('ed25519');
+      const reliability=generateKeyPairSync('ed25519');
+      const reviewers={
+        security_auditor:{role:'security',publicKey:security.publicKey},
+        reliability_auditor:{role:'reliability',
+          publicKey:reliability.publicKey}
+      };
+      const reviewerTime=Date.now();
+      const humanApprovals=[
+        ['security','security_auditor',security],
+        ['reliability','reliability_auditor',reliability]
+      ].map(([role,reviewerId,key])=>signR61Approval({
+        privateKey:key.privateKey,payload:{
+          tenantId,incidentId,epoch:22,
+          evidenceSha256:finalReview.evidenceSha256,s3Version:null,
+          action:'investigate',role,reviewerId,
+          nonce:randomBytes(16).toString('hex'),
+          issuedAt:reviewerTime-1000,expiresAt:reviewerTime+120000
+        }
+      }));
+      const labGate=await assessR65HumanOnlyRecovery({
+        tenantId,incidentId,epoch:22,
+        manifest:sealed,archivePublicKey:kp.publicKey,
+        custody:dual,acknowledged:ack,restoredRows,
+        failureAtMs,recoveryAtMs:Date.now(),
+        sourceProcessDestroyed:true,humanApprovals,reviewers
+      });
+      assert.equal(labGate.syntheticLabEvidenceReadyForHumanReview,true);
+      assert.equal(labGate.missingSyntheticAcknowledgements,8);
+      assert.equal(labGate.independentSignedHumanReviewers,2);
+      assert.equal(labGate.mayDeploy,false);
+      assert.equal(labGate.productionCutoverAllowed,false);
       await assert.rejects(docker(['inspect',
         'pg-r64-primary']),/No such object|No such container/);
     }finally{
